@@ -3,15 +3,6 @@ import json
 
 import bundle
 
-def get_md5sum(filepath):
-    checksum = None
-    with open(f'{filepath}.md5') as f:
-        line = f.readline()        
-        parts = line.strip().split(' ')
-        assert len(parts) == 2
-        checksum = parts[0]
-    return checksum
-
 def main():
     version = None
     if len(sys.argv) > 1:
