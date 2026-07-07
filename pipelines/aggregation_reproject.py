@@ -38,11 +38,10 @@ def create_warp(vrt_filepath, vrt_3857_filepath, zoom, aggregation_tile, buffer)
     command += '-t_srs EPSG:3857 '
     command += f'-tr {resolution} {resolution} '
     command += f'-te {left} {bottom} {right} {top} '
-    command += '-r cubicspline '
-    command += '-dstnodata -9999 '
+    command += '-r lanczos '
     command += f'{vrt_filepath} {vrt_3857_filepath}'
     out, err = utils.run_command(command, silent=SILENT)
-    if err.strip() != '':
+    if 'ERROR' in err.upper() or 'FATAL' in err.upper():
         raise Exception(f'gdalwarp failed for {vrt_filepath}:\n{out}\n{err}')
 
 def translate(in_filepath, out_filepath):

@@ -40,10 +40,13 @@ def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
         height=row_end - row_start
     )
     subdata = None
-    with rasterio.open(tiff_filepath) as src: 
-        subdata = src.read(1, window=window, out_shape=(512, 512))
-    subdata[subdata == -9999] = 0
-    utils.save_terrarium_tile(subdata, out_filepath)
+    with rasterio.open(tiff_filepath) as src:
+        if src.count >= 3:
+            subdata = src.read([1, 2, 3], window=window, out_shape=(3, 512, 512))
+            subdata = subdata.transpose((1, 2, 0))
+        else:
+            subdata = src.read(1, window=window, out_shape=(512, 512))
+    utils.save_rgb_tile(subdata, out_filepath)
 
 def main(filepath):
     _, aggregation_id, filename = filepath.split('/')

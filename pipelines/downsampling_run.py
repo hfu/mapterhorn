@@ -15,7 +15,7 @@ import utils
 
 def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtiles_filenames):
     tile_to_pmtiles_filename = get_tile_to_pmtiles_filename(pmtiles_filenames)
-    full_data = np.zeros((1024, 1024), dtype=np.float32)
+    full_data = np.zeros((1024, 1024, 3), dtype=np.float32)
     for row_offset in range(2):
         for col_offset in range(2):
             child_x = 2 * parent_x + col_offset
@@ -36,18 +36,13 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             row_end = 512 * (row_offset + 1)
             col_start = 512 * col_offset
             col_end = 512 * (col_offset + 1)
-            # (red * 256 + green + blue / 256) - 32768
-            full_data[row_start:row_end, col_start:col_end] = child_rgb[:, :, 0] * 256.0 + child_rgb[:, :, 1] + child_rgb[:, :, 2] / 256.0 - 32768.0
-            
-    parent_data = full_data.reshape((512, 2, 512, 2)).mean(axis=(1, 3)) # downsample by 4x4 pixel averaging
+            if child_rgb.ndim == 2:
+                child_rgb = np.stack([child_rgb, child_rgb, child_rgb], axis=2)
+            full_data[row_start:row_end, col_start:col_end] = child_rgb
 
-    parent_data += 32768.0
-    parent_rgb = np.zeros((512, 512, 3), dtype=np.uint8)
-    parent_rgb[:, :, 0] = parent_data // 256
-    parent_rgb[:, :, 1] = np.floor(parent_data % 256)
-    parent_rgb[:, :, 2] = np.floor((parent_data - np.floor(parent_data)) * 256)
+    parent_rgb = full_data.reshape((512, 2, 512, 2, 3)).mean(axis=(1, 3)).astype(np.uint8)
 
-    parent_bytes = imagecodecs.webp_encode(parent_rgb, lossless=True)
+    parent_bytes = imagecodecs.webp_encode(parent_rgb, lossless=False, quality=80)
     parent_filepath = f'{tmp_folder}/{parent_z}-{parent_x}-{parent_y}.webp'
     with open(parent_filepath, 'wb') as f:
         f.write(parent_bytes)
