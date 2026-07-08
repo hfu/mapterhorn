@@ -76,7 +76,7 @@ def save_rgb_tile(rgb_data, filepath):
         rgb_data = np.stack([rgb_data, rgb_data, rgb_data], axis=2)
     rgb_data = np.clip(rgb_data, 0, 255).astype(np.uint8)
     with open(filepath, 'wb') as f:
-        f.write(imagecodecs.webp_encode(rgb_data, lossless=False, quality=80))
+        f.write(imagecodecs.webp_encode(rgb_data, lossless=False, level=80))
 
 def create_archive(tmp_folder, out_filepath):
     with open(out_filepath, 'wb') as f1:
