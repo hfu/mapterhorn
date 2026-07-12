@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RGB Orthophoto Viewer</title>
+<script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/pmtiles@4.3.0/dist/pmtiles.js"></script>
+<style>
+  body { margin: 0; padding: 0; }
+  #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+  #form { position: fixed; z-index: 1; background: white; padding: 0.3rem; width: 100vw; display: flex; height: 30px; }
+  #input { flex-grow: 1; margin-right: 0.5rem; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<form id="form">
+  <input id="input" type="text" placeholder="TileJSON or .pmtiles URL" />
+  <button type="submit">View</button>
+</form>
+<script>
+  function parseHash(hash) {
+    const retval = {};
+    for (const pair of hash.replace('#', '').split('&')) {
+      const idx = pair.indexOf('=');
+      if (idx === -1) continue;
+      const key = pair.slice(0, idx);
+      const value = pair.slice(idx + 1);
+      if (key) retval[key] = decodeURIComponent(value);
+    }
+    return retval;
+  }
+
+  let protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol('pmtiles', protocol.tile);
+
+  const params = parseHash(location.hash);
+  let url = params.url || '';
+  document.getElementById('input').value = url;
+
+  const centerLat = parseFloat(params.lat) || 8.4995373;
+  const centerLon = parseFloat(params.lon) || -13.2989501;
+  const zoom = parseFloat(params.z) || 18;
+
+  function buildStyle(url) {
+    return {
+      version: 8,
+      sources: {
+        rgbSource: {
+          type: 'raster',
+          url: url.endsWith('.pmtiles') ? 'pmtiles://' + url : url,
+          tileSize: 512,
+        },
+      },
+      layers: [
+        { id: 'rgb', type: 'raster', source: 'rgbSource' },
+      ],
+    };
+  }
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    zoom: zoom,
+    center: [centerLon, centerLat],
+    style: url ? buildStyle(url) : { version: 8, sources: {}, layers: [] },
+  });
+  map.addControl(new maplibregl.NavigationControl());
+
+  document.getElementById('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const newUrl = document.getElementById('input').value.trim();
+    if (!newUrl) return;
+    map.setStyle(buildStyle(newUrl));
+  });
+</script>
+</body>
+</html>
