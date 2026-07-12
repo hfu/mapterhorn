@@ -40,13 +40,18 @@ def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
         height=row_end - row_start
     )
     subdata = None
+    mask_data = None
     with rasterio.open(tiff_filepath) as src:
         if src.count >= 3:
             subdata = src.read([1, 2, 3], window=window, out_shape=(3, 512, 512))
             subdata = subdata.transpose((1, 2, 0))
         else:
             subdata = src.read(1, window=window, out_shape=(512, 512))
-    utils.save_rgb_tile(subdata, out_filepath)
+        # Read mask if available (nodata/alpha)
+        if src.dataset_mask() is not None:
+            mask_data = src.dataset_mask(window=window, out_shape=(512, 512))
+            mask_data = mask_data.astype(np.float32) / 255.0
+    utils.save_rgb_tile(subdata, out_filepath, mask_data=mask_data)
 
 def main(filepath):
     _, aggregation_id, filename = filepath.split('/')

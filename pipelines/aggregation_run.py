@@ -8,6 +8,16 @@ import aggregation_merge
 import aggregation_tile
 import utils
 
+def get_worker_count():
+    """Get worker count with graceful defaults (mirrors downsampling_run.py)"""
+    if 'AGGREGATION_WORKERS' in os.environ:
+        try:
+            return int(os.environ['AGGREGATION_WORKERS'])
+        except ValueError:
+            pass
+    # Default: 4 workers (half of typical 8-core hardware, avoids saturating CPU/disk)
+    return 4
+
 def run(filepath):
     filename = filepath.split('/')[-1]
     item = filename.replace('-aggregation.csv', '')
@@ -38,7 +48,9 @@ def main():
         print(f'start aggregating {len(dirty_filepaths)} items...')
 
     argument_tuples = [(dirty_filepath,) for dirty_filepath in dirty_filepaths]
-    with Pool() as pool:
+    worker_count = get_worker_count()
+    print(f'using {worker_count} workers (set AGGREGATION_WORKERS to override)')
+    with Pool(processes=worker_count) as pool:
         pool.starmap(run, argument_tuples, chunksize=1)
 
 if __name__ == '__main__':

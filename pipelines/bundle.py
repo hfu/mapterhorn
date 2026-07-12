@@ -187,7 +187,7 @@ def main():
         print('Not enough arguments. Usage: bundle.py {{num_aggregations}}')
         exit()
     
-    dirty_only = True
+    dirty_only = False  # Bundling all files (not just dirty) to include new downsampling tiles
     parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations)
     for parent in parent_to_filepaths:
         name = get_name_from_parent(parent)
