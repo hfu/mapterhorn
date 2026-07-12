@@ -4,6 +4,8 @@ from multiprocessing import Pool
 import shutil
 from datetime import datetime
 import os
+import sys
+import argparse
 
 import numpy as np
 from PIL import Image
@@ -50,6 +52,103 @@ def optimize_parent_processing_order(parents, pmtiles_filenames):
     # Sort by geographic proximity (clustering)
     # The create_tile function will handle PMTiles lookups efficiently
     return sort_parents_by_geographic_proximity(parents)
+
+def validate_pmtiles_file(filepath):
+    """Validate a single PMTiles file. Returns (is_valid, error_message)"""
+    try:
+        size = os.path.getsize(filepath)
+
+        # Check 1: File size (must be at least 16KB)
+        if size < 16384:
+            return False, f"File too small ({size} bytes)"
+
+        # Check 2: File signature
+        with open(filepath, 'rb') as f:
+            header = f.read(8)
+            if not header.startswith(b'PMTiles'):
+                return False, f"Invalid header signature: {header!r}"
+
+        # Check 3: Can read with PMTiles Reader
+        with open(filepath, 'r+b') as f:
+            reader = Reader(MmapSource(f))
+            # Try to access header to ensure file is readable
+            _ = reader.header
+
+        return True, None
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:80]}"
+
+def check_and_fix_pmtiles(pmtiles_dir='pmtiles-store', dry_run=False):
+    """Check all PMTiles files for corruption and remove broken ones.
+
+    Returns a list of (filepath, error) tuples for broken files.
+    """
+    from pathlib import Path
+
+    pmtiles_path = Path(pmtiles_dir)
+    files = sorted(pmtiles_path.glob('**/*.pmtiles'))
+
+    print(f"\n=== PMTiles Validation Report ({len(files)} files) ===\n")
+
+    issues = []
+    for f in files:
+        is_valid, error = validate_pmtiles_file(str(f))
+        relpath = f.relative_to(pmtiles_path)
+
+        if is_valid:
+            print(f"✅ {relpath}")
+        else:
+            print(f"❌ {relpath}: {error}")
+            issues.append((str(f), error))
+
+    if issues:
+        print(f"\n=== Found {len(issues)} broken files ===")
+        if not dry_run:
+            for filepath, error in issues:
+                print(f"\nRemoving: {filepath}")
+                os.remove(filepath)
+
+                # Remove corresponding .done marker
+                basename = os.path.basename(filepath).replace('.pmtiles', '')
+                done_files = glob(f'aggregation-store/*/{basename}-downsampling.done')
+                for done_file in done_files:
+                    print(f"  Removed .done: {done_file}")
+                    os.remove(done_file)
+        else:
+            print("\n(DRY RUN: No files removed)")
+
+    print(f"\n=== Summary ===")
+    print(f"Total files: {len(files)}")
+    print(f"Valid: {len(files) - len(issues)}")
+    print(f"Broken: {len(issues)}")
+
+    return issues
+
+def regenerate_matching_files(pattern, dry_run=False):
+    """Regenerate PMTiles files matching a pattern by removing .done markers.
+
+    Pattern: can be a filename fragment like '15-15170-15611-20'
+    """
+    done_files = glob(f'aggregation-store/*/{pattern}-downsampling.done')
+
+    if not done_files:
+        print(f"No .done files found matching pattern: {pattern}")
+        return
+
+    print(f"\nRegeneration plan for pattern: {pattern}")
+    print(f"Files to regenerate: {len(done_files)}\n")
+
+    for done_file in done_files:
+        csv_file = done_file.replace('-downsampling.done', '-downsampling.csv')
+        print(f"  - {csv_file.split('/')[-1]}")
+        if not dry_run:
+            os.remove(done_file)
+            print(f"    ✅ Removed .done marker")
+
+    if dry_run:
+        print("\n(DRY RUN: No changes made)")
+    else:
+        print(f"\n✅ {len(done_files)} file(s) marked for regeneration")
 
 def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtiles_filenames):
     tile_to_pmtiles_filename = get_tile_to_pmtiles_filename(pmtiles_filenames)
@@ -192,6 +291,30 @@ def not_in_previous_aggregation(filename, aggregation_ids):
     return len(glob(f'aggregation-store/{aggregation_ids[-2]}/{filename}')) == 0
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Downsampling optimization with validation')
+    parser.add_argument('--validate', action='store_true', help='Validate all PMTiles files')
+    parser.add_argument('--fix', action='store_true', help='Auto-detect and remove broken PMTiles files')
+    parser.add_argument('--regenerate', metavar='PATTERN', help='Regenerate files matching pattern (e.g., 15-15170-15611-20)')
+    parser.add_argument('--dry-run', action='store_true', help='Show what would be done without making changes')
+
+    args = parser.parse_args()
+
+    # Handle validation/repair options
+    if args.validate:
+        check_and_fix_pmtiles(dry_run=True)
+        sys.exit(0)
+
+    if args.fix:
+        issues = check_and_fix_pmtiles(dry_run=args.dry_run)
+        if issues and not args.dry_run:
+            print(f"\n✅ Fixed {len(issues)} file(s). Run again to regenerate.")
+        sys.exit(0)
+
+    if args.regenerate:
+        regenerate_matching_files(args.regenerate, dry_run=args.dry_run)
+        sys.exit(0)
+
+    # Normal downsampling processing
     child_zoom_to_filepaths = {}
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
