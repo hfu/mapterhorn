@@ -4,6 +4,7 @@ import os
 import json
 
 import mercantile
+import numpy as np
 import rasterio
 
 import utils
@@ -47,10 +48,10 @@ def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
             subdata = subdata.transpose((1, 2, 0))
         else:
             subdata = src.read(1, window=window, out_shape=(512, 512))
-        # Read mask if available (nodata/alpha)
-        if src.dataset_mask() is not None:
-            mask_data = src.dataset_mask(window=window, out_shape=(512, 512))
-            mask_data = mask_data.astype(np.float32) / 255.0
+        # Read mask (nodata/alpha) for this window only - dataset_mask() always
+        # returns an array, so read it windowed rather than probing full-res first.
+        mask_data = src.dataset_mask(window=window, out_shape=(512, 512))
+        mask_data = mask_data.astype(np.float32) / 255.0
     utils.save_rgb_tile(subdata, out_filepath, mask_data=mask_data)
 
 def main(filepath):
