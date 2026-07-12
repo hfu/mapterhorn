@@ -70,15 +70,31 @@ def save_terrarium_tile(data, filepath):
     with open(filepath, 'wb') as f:
         f.write(imagecodecs.webp_encode(rgb, lossless=True))
 
-def save_rgb_tile(rgb_data, filepath):
-    """Save orthophoto RGB tile as WebP (for orthophoto workflows, not elevation Terrarium)."""
+def save_rgb_tile(rgb_data, filepath, mask_data=None):
+    """Save orthophoto RGB tile as WebP with optional alpha channel from mask.
+    Black pixels (0,0,0) are treated as transparent/nodata."""
     if rgb_data.ndim == 2:
         rgb_data = np.stack([rgb_data, rgb_data, rgb_data], axis=2)
+
     rgb_data = np.nan_to_num(rgb_data, nan=0.0)
     rgb_data = np.clip(rgb_data, 0, 255).astype(np.uint8)
-    rgb_data = np.ascontiguousarray(rgb_data)
+
+    # Create alpha channel: nodata from mask + black pixel transparency
+    alpha = np.ones((rgb_data.shape[0], rgb_data.shape[1]), dtype=np.uint8) * 255
+
+    if mask_data is not None:
+        mask_data = np.clip(mask_data, 0, 1) * 255
+        alpha = mask_data.astype(np.uint8)
+
+    # Make black pixels (0,0,0) transparent (nodata)
+    black_pixels = (rgb_data[:,:,0] == 0) & (rgb_data[:,:,1] == 0) & (rgb_data[:,:,2] == 0)
+    alpha[black_pixels] = 0
+
+    rgba_data = np.dstack([rgb_data, alpha])
+    rgba_data = np.ascontiguousarray(rgba_data)
+    encoded = imagecodecs.webp_encode(rgba_data, lossless=False, level=80)
+
     with open(filepath, 'wb') as f:
-        encoded = imagecodecs.webp_encode(rgb_data, lossless=False, level=80)
         if encoded:
             f.write(encoded)
 
@@ -98,6 +114,9 @@ def create_archive(tmp_folder, out_filepath):
             z, x, y = [int(a) for a in filename.replace('.webp', '').split('-')]
             tile_ids.append(zxy_to_tileid(z=z, x=x, y=y))
         tile_ids = sorted(tile_ids)
+
+        if not tile_ids:
+            raise ValueError(f'No tiles found in {tmp_folder}. Parent tile processing may have skipped all tiles.')
 
         for tile_id in tile_ids:
             z, x, y = tileid_to_zxy(tile_id)
