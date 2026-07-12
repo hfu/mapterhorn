@@ -23,6 +23,11 @@ def get_parent_to_filepaths(only_dirty, num_aggregations):
         z, x, y, child_z = [int(a) for a in filename.replace('.pmtiles', '').split('-')]
         
         parent = None
+        # child_z here is a source's resolution zoom, not utils.macrotile_z (the covering
+        # grid zoom) - the two are unrelated despite historically sharing the value 12.
+        # aggregation_covering.py forces child_z >= utils.macrotile_z, so this branch is
+        # unreachable for any project whose macrotile_z has been raised above 12 (e.g. this
+        # one, raised to 17 for a 4cm/px source) - such projects always take the else branch.
         if child_z <= 12:
             parent = mercantile.Tile(x=0, y=0, z=0)
         else:

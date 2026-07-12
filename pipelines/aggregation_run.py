@@ -12,7 +12,9 @@ def get_worker_count():
     """Get worker count with graceful defaults (mirrors downsampling_run.py)"""
     if 'AGGREGATION_WORKERS' in os.environ:
         try:
-            return int(os.environ['AGGREGATION_WORKERS'])
+            value = int(os.environ['AGGREGATION_WORKERS'])
+            if value >= 1:
+                return value
         except ValueError:
             pass
     # Default: 4 workers (half of typical 8-core hardware, avoids saturating CPU/disk)
