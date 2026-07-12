@@ -32,7 +32,7 @@ def merge_source(source):
     merged_filepath = f'polygon-store/{source}/merged.gpkg'
     if os.path.isfile(merged_filepath):
         os.remove(merged_filepath)
-    command = f'ogr2ogr -f GPKG {merged_filepath} polygon-store/{source}/{filenames[0]}.gpkg'
+    command = f'ogr2ogr -f GPKG {merged_filepath} polygon-store/{source}/{filenames[0]}.gpkg -nln out'
     utils.run_command(command, silent=False)
     for j, filename in enumerate(filenames[1:]):
         if j % 100 == 0:
