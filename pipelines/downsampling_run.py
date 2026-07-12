@@ -13,9 +13,20 @@ from pmtiles.reader import Reader, MmapSource
 
 import utils
 
+def get_worker_count():
+    """Get worker count with graceful defaults"""
+    # Environment variable override
+    if 'DOWNSAMPLING_WORKERS' in os.environ:
+        try:
+            return int(os.environ['DOWNSAMPLING_WORKERS'])
+        except ValueError:
+            pass
+    # Default: 5 workers (optimized for current hardware)
+    return 5
+
 def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtiles_filenames):
     tile_to_pmtiles_filename = get_tile_to_pmtiles_filename(pmtiles_filenames)
-    full_data = np.zeros((1024, 1024, 3), dtype=np.float32)
+    full_data = np.zeros((1024, 1024, 4), dtype=np.float32)  # RGBA (with alpha)
     for row_offset in range(2):
         for col_offset in range(2):
             child_x = 2 * parent_x + col_offset
@@ -28,21 +39,31 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             filename = tile_to_pmtiles_filename[child]
             file_z, file_x, file_y, _ = [int(a) for a in filename.replace('.pmtiles', '').split('-')]
             pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
-            with open(f'{pmtiles_folder}/{filename}' , 'r+b') as f:
+            filepath = f'{pmtiles_folder}/{filename}'
+
+            # Skip if PMTiles file is missing (incomplete aggregation)
+            if not os.path.isfile(filepath):
+                continue
+
+            with open(filepath, 'r+b') as f:
                 reader = Reader(MmapSource(f))
                 child_bytes = reader.get(child_z, child_x, child_y)
-            child_rgb = np.array(Image.open(io.BytesIO(child_bytes)), dtype=np.float32)
+            child_img = np.array(Image.open(io.BytesIO(child_bytes)), dtype=np.float32)
             row_start = 512 * row_offset
             row_end = 512 * (row_offset + 1)
             col_start = 512 * col_offset
             col_end = 512 * (col_offset + 1)
-            if child_rgb.ndim == 2:
-                child_rgb = np.stack([child_rgb, child_rgb, child_rgb], axis=2)
-            full_data[row_start:row_end, col_start:col_end] = child_rgb
+            # Handle RGBA or RGB
+            if child_img.ndim == 2:
+                child_img = np.stack([child_img, child_img, child_img, np.ones_like(child_img)*255], axis=2)
+            elif child_img.shape[2] == 3:
+                alpha = np.ones((child_img.shape[0], child_img.shape[1], 1)) * 255
+                child_img = np.dstack([child_img, alpha])
+            full_data[row_start:row_end, col_start:col_end] = child_img
 
-    parent_rgb = full_data.reshape((512, 2, 512, 2, 3)).mean(axis=(1, 3)).astype(np.uint8)
+    parent_rgba = full_data.reshape((512, 2, 512, 2, 4)).mean(axis=(1, 3)).astype(np.uint8)
 
-    parent_bytes = imagecodecs.webp_encode(parent_rgb, lossless=False, quality=80)
+    parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=False, level=80)
     parent_filepath = f'{tmp_folder}/{parent_z}-{parent_x}-{parent_y}.webp'
     with open(parent_filepath, 'wb') as f:
         f.write(parent_bytes)
@@ -94,7 +115,8 @@ def main(filepaths):
         for parent in parents:
             argument_tuples.append((parent.x, parent.y, parent.z, aggregation_id, tmp_folder, pmtiles_filenames))
 
-        with Pool() as pool:
+        worker_count = get_worker_count()
+        with Pool(processes=worker_count) as pool:
             pool.starmap(create_tile, argument_tuples, chunksize=1)
         
         utils.create_archive(tmp_folder, out_filepath)
