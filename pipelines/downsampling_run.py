@@ -15,6 +15,14 @@ from pmtiles.reader import Reader, MmapSource
 
 import utils
 
+# Geographic center for prioritization (default: Freetown, Sierra Leone)
+# Override with environment variables: CENTER_LAT, CENTER_LON
+DEFAULT_CENTER_LAT = 8.465  # Freetown latitude
+DEFAULT_CENTER_LON = -13.234  # Freetown longitude
+
+CENTER_LAT = float(os.environ.get('CENTER_LAT', DEFAULT_CENTER_LAT))
+CENTER_LON = float(os.environ.get('CENTER_LON', DEFAULT_CENTER_LON))
+
 def get_worker_count():
     """Get worker count with graceful defaults"""
     # Environment variable override
@@ -149,6 +157,29 @@ def regenerate_matching_files(pattern, dry_run=False):
         print("\n(DRY RUN: No changes made)")
     else:
         print(f"\n✅ {len(done_files)} file(s) marked for regeneration")
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """Calculate approximate distance in degrees (Euclidean)"""
+    return ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
+
+def sort_files_by_proximity(filepaths, center_lat=CENTER_LAT, center_lon=CENTER_LON):
+    """Sort files: by zoom level (high first), then by distance from center"""
+    def sort_key(filepath):
+        filename = filepath.split('/')[-1]
+        z, x, y, child_zoom = [int(a) for a in filename.replace('-downsampling.csv', '').split('-')]
+
+        # Calculate tile center using mercantile
+        tile = mercantile.Tile(x=x, y=y, z=z)
+        bounds = mercantile.bounds(tile)
+        tile_lat = (bounds.north + bounds.south) / 2
+        tile_lon = (bounds.east + bounds.west) / 2
+
+        distance = calculate_distance(tile_lat, tile_lon, center_lat, center_lon)
+
+        # Sort: by zoom (descending), then by distance (ascending)
+        return (-z, distance)
+
+    return sorted(filepaths, key=sort_key)
 
 def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtiles_filenames):
     tile_to_pmtiles_filename = get_tile_to_pmtiles_filename(pmtiles_filenames)
@@ -315,7 +346,6 @@ if __name__ == '__main__':
         sys.exit(0)
 
     # Normal downsampling processing
-    child_zoom_to_filepaths = {}
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
 
@@ -326,15 +356,22 @@ if __name__ == '__main__':
             z, x, y, _ = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
             dirty_aggregation_tiles.append(mercantile.Tile(x=x, y=y, z=z))
 
-    for filepath in sorted(glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv')):
+    # Collect all processing files
+    all_files = []
+    for filepath in glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv'):
         filename = filepath.split('/')[-1]
         z, x, y, child_zoom = [int(a) for a in filename.replace('-downsampling.csv', '').split('-')]
 
         if len(aggregation_ids) < 2 or is_parent_of_dirty_aggregation_tile(mercantile.Tile(x=x, y=y, z=z), dirty_aggregation_tiles) or not_in_previous_aggregation(filename, aggregation_ids):
-            if child_zoom not in child_zoom_to_filepaths:
-                child_zoom_to_filepaths[child_zoom] = []
-            child_zoom_to_filepaths[child_zoom].append(filepath)
+            all_files.append(filepath)
 
-    child_zooms = list(reversed(sorted(list(child_zoom_to_filepaths.keys()))))
-    for child_zoom in child_zooms:
-        main(child_zoom_to_filepaths[child_zoom])
+    # Sort by proximity to center (high zoom first, then by distance)
+    sorted_files = sort_files_by_proximity(all_files, CENTER_LAT, CENTER_LON)
+
+    print(f"\n=== Processing Order (Center: {CENTER_LAT}, {CENTER_LON}) ===")
+    print(f"First 10 files to process:")
+    for i, f in enumerate(sorted_files[:10], 1):
+        print(f"  {i}. {f.split('/')[-1]}")
+    print(f"Total: {len(sorted_files)} files\n")
+
+    main(sorted_files)
