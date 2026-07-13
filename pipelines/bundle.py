@@ -23,11 +23,14 @@ def get_parent_to_filepaths(only_dirty, num_aggregations):
         z, x, y, child_z = [int(a) for a in filename.replace('.pmtiles', '').split('-')]
         
         parent = None
-        # child_z here is a source's resolution zoom, not utils.macrotile_z (the covering
-        # grid zoom) - the two are unrelated despite historically sharing the value 12.
-        # aggregation_covering.py forces child_z >= utils.macrotile_z, so this branch is
-        # unreachable for any project whose macrotile_z has been raised above 12 (e.g. this
-        # one, raised to 17 for a 4cm/px source) - such projects always take the else branch.
+        # child_z here is the zoom level of the tiles inside this specific pmtiles-store
+        # archive, not utils.macrotile_z (the aggregation covering grid zoom) - the two are
+        # unrelated despite historically sharing the value 12. Aggregation output archives
+        # always have child_z == the source's forced maxzoom (>= utils.macrotile_z, so never
+        # <= 12 once macrotile_z is raised above 12, as this project's is). But downsampling
+        # generates archives at every zoom down to 1, so low-zoom overview archives DO take
+        # this branch and land in the single global planet.pmtiles bucket - correct behavior,
+        # not dead code.
         if child_z <= 12:
             parent = mercantile.Tile(x=0, y=0, z=0)
         else:
