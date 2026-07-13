@@ -48,7 +48,18 @@ def main():
                 'center_lat_e7': int(8.4995373 * 1e7),
             },
             {
-                'attribution': '<a href="https://mapterhorn.com/attribution">© Mapterhorn</a>',
+                # Source imagery: "Freetown Urban with Sensitive Areas Blurred" by Ivan
+                # Gayton / DroneTM / HOTOSM, via OpenAerialMap (CC-BY 4.0 - OAM's standard
+                # license; this record doesn't set its own license field, so the platform
+                # default applies). Processed with Mapterhorn - the generic
+                # mapterhorn.com/attribution link is for the upstream project's own
+                # multi-source catalog, not this derived single-source archive, so it does
+                # not by itself satisfy CC-BY's attribution requirement for the source data.
+                'attribution': (
+                    'Imagery: Ivan Gayton / DroneTM / HOTOSM, via '
+                    '<a href="https://map.openaerialmap.org">OpenAerialMap</a> (CC-BY 4.0). '
+                    'Processed with <a href="https://mapterhorn.com">Mapterhorn</a>.'
+                ),
             },
         )
     print(f'wrote {OUTPUT}, {total:_} tiles total')
