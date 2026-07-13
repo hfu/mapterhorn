@@ -120,7 +120,7 @@ def print_progress_report(metrics):
 
     print(f"⏱️  Performance Metrics")
     print(f"  Elapsed:         {format_duration(metrics['elapsed_time'])}")
-    print(f"  Avg per file:    {metrics['avg_time_per_file']:.2f} min/CSV")
+    print(f"  Avg per file:    {metrics['avg_time_per_file']:.2f} sec/CSV")
     print()
 
     print(f"⏳ Estimated Completion")
