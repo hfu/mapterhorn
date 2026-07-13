@@ -176,8 +176,13 @@ def sort_files_by_proximity(filepaths, center_lat=CENTER_LAT, center_lon=CENTER_
 
         distance = calculate_distance(tile_lat, tile_lon, center_lat, center_lon)
 
-        # Sort: by zoom (descending), then by distance (ascending)
-        return (-z, distance)
+        # Sort: by output zoom descending (child_zoom = the level this item
+        # BUILDS, not the coarser extent-grouping zoom z), then by distance.
+        # This must process every level's builder before anything that reads
+        # its output, or create_tile() silently skips missing inputs and
+        # marks the item .done anyway - producing a permanently incomplete
+        # tile with no retry.
+        return (-child_zoom, distance)
 
     return sorted(filepaths, key=sort_key)
 
