@@ -6,7 +6,11 @@ pmtiles-store
 bundle-store
 polygon-store
 tar-store
+meta-store
 planetiler.jar
 index.md
 index.pmtiles
 data
+*.log
+*.log.*
+.DS_Store

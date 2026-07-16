@@ -4,6 +4,8 @@
 
 Mapterhorn has four main pipelines that run in sequence: Source, Aggregation, Downsampling, and Bundle. The input is a set of tifs containing elevation data and the output are PMTiles files with terrain RGB.
 
+> **Fork note**: this checkout also supports an orthophoto/RGB mode (Lanczos resampling + WebP RGB encoding instead of Terrarium elevation encoding) for processing aerial/satellite imagery instead of DEMs. See [`FORK_NOTES.md`](../FORK_NOTES.md) for what's different from upstream `mapterhorn/mapterhorn` and why.
+
 <img src="readme_imgs/pipeline.svg">
 
 ## Source
