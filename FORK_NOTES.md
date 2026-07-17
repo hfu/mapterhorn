@@ -35,4 +35,6 @@ Useful for this deployment but hardcoded to this project or not generically appl
 
 ## Status
 
-Not yet pushed to a public GitHub fork — `origin` still points directly at `mapterhorn/mapterhorn`. See project owner for current plans on publishing and upstream contribution.
+Published as [`hfu/mapterhorn`](https://github.com/hfu/mapterhorn) (`origin`); `upstream` remote tracks `mapterhorn/mapterhorn`.
+
+Merged upstream's subsequent 2 commits (`93075b4`, `6cdf66b` — Manager/Worker addition + the aggregation stage's `.todo`/`.done` checkpoint refactor) into this fork. One deliberate divergence from that merge: **`pipelines/downsampling_run.py` was kept on this fork's own version** rather than adopting upstream's parallel refactor there, because this fork's dirty-tile-tracking + geographic-proximity processing order is what actually produced the completed Freetown archive and upstream's new approach is untested against the RGB code path. Upstream's `downsampling_covering.py` (merged in unmodified, since this fork never touched it) now also writes `*.csv.todo` marker files as part of its own dirty-tile tracking — this fork's `downsampling_run.py` ignores them and does its own equivalent filtering directly against `*.csv`, so the extra marker files are harmless but redundant. Revisit this if/when adopting upstream's Manager/Worker model.

@@ -54,12 +54,10 @@ def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
         mask_data = mask_data.astype(np.float32) / 255.0
     utils.save_rgb_tile(subdata, out_filepath, mask_data=mask_data)
 
-def main(filepath):
-    _, aggregation_id, filename = filepath.split('/')
+def main(filepath, tmp_folder):
+    filename = filepath.split('/')[-1]
 
     z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
-
-    tmp_folder = f'aggregation-store/{aggregation_id}/{z}-{x}-{y}-{child_z}-tmp'
 
 
     pmtiles_done_filepath = f'{tmp_folder}/pmtiles-done'
