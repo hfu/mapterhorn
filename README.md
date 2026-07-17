@@ -6,6 +6,8 @@
 
 Public terrain tiles for interactive web map visualizations
 
+> **⚠️ Fork Note**: This is a fork of [mapterhorn/mapterhorn](https://github.com/mapterhorn/mapterhorn) adapted for **orthophoto/RGB workflows** (aerial/satellite imagery) instead of elevation data. For upstream's terrain-focused version, see [https://github.com/mapterhorn/mapterhorn](https://github.com/mapterhorn/mapterhorn). See [`FORK_NOTES.md`](FORK_NOTES.md) for what's different and why.
+
 ## Viewer
 
 [https://mapterhorn.com/viewer](https://mapterhorn.com/viewer)
