@@ -1,0 +1,10 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# Process counts kept low deliberately (see FORK_NOTES.md / this
+# machine's resource assessment, 2026-08-08): Apple M1, 8 GB RAM only.
+[no-cd]
+default:
+    uv run python source_download.py jphokkaidodem1
+    uv run python source_to_cog.py jphokkaidodem1
+    uv run python source_bounds.py jphokkaidodem1
+    uv run python source_polygonize.py jphokkaidodem1 4
+    uv run python source_create_tarball.py jphokkaidodem1
