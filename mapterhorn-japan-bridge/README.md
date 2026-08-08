@@ -8,21 +8,37 @@ picked up a July 2026 GSI survey update for Hokkaido. Once it does, this
 product should be considered retired — check
 [mapterhorn.com](https://mapterhorn.com/) for the official tiles first.
 
+## Preview
+
+[**View `japan.pmtiles` in Mapterhorn's own viewer**](https://mapterhorn.com/viewer/#url=https://data.source.coop/smartmaps/mapterhorn-japan-bridge/japan.pmtiles)
+
+`japan.pmtiles` is a single, ever-growing archive -- the same URL keeps
+working as coverage expands from Hokkaido today toward the rest of
+Japan later, so this link and any bookmark of it stay valid. It's
+rebuilt (all currently-produced tiles remerged) each time coverage
+grows, not incrementally, so expect this file's size to grow with
+total coverage rather than staying small.
+
 ## What's in this dataset
 
 Terrain tiles in Mapterhorn's own format: PMTiles archives, Terrarium
 encoding, WebP tiles, 512×512px, generated with
 [`hfu/mapterhorn`](https://github.com/hfu/mapterhorn) (a fork of
 `mapterhorn/mapterhorn` carrying a handful of generic upstream bug fixes,
-see that repo's `FORK_NOTES.md`) from freshly-reprocessed GSI 1m DEM
-data published at
-[`smartmaps/japan-geotiff-dem`](https://source.coop/smartmaps/japan-geotiff-dem).
+see that repo's `FORK_NOTES.md`) from freshly-reprocessed GSI DEM data
+published at
+[`smartmaps/japan-geotiff-dem`](https://source.coop/smartmaps/japan-geotiff-dem)
+-- 1m where available, falling back to 5m/10m via Mapterhorn's own
+priority-merge where 1m coverage has gaps (GSI's 1m LIDAR survey
+doesn't cover 100% of the land area).
 
-Files follow Mapterhorn's own bundle naming convention: `{z}-{x}-{y}.pmtiles`,
-where z/x/y identify the zoom-6 tile each bundle covers. Coverage is
-partial and grows incrementally as more of Hokkaido is reprocessed --
-this file won't always describe the current extent; browse this
-product's file listing for what's actually present.
+`japan.pmtiles` is the merged, ready-to-view archive (see Preview
+above). The per-region `{z}-{x}-{y}.pmtiles` files (Mapterhorn's own
+bundle naming, z/x/y identifying the zoom-6 tile each covers) are also
+present for anyone who wants unmerged pieces. Coverage is partial and
+grows incrementally as more of Hokkaido is reprocessed -- this file
+won't always describe the current extent; browse this product's file
+listing for what's actually present.
 
 **Encoding**: `elevation = (R × 256 + G + B / 256) - 32768` (meters).
 
