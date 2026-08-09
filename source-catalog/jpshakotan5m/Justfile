@@ -1,0 +1,12 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# 5m fallback layer for jpshakotan1, same scope (see that entry's
+# Justfile for exact bounds and reasoning). 718 files, deduplicated by
+# newest survey date per position (no duplicates found at this
+# resolution, unlike the 1m layer). Deliberately built with whatever is
+# currently on Source Cooperative -- see jpshakotan1's Justfile for why.
+# source_to_cog.py deliberately skipped, same reasoning as jpsapporo1.
+[no-cd]
+default:
+    uv run python source_download.py jpshakotan5m
+    uv run python source_bounds.py jpshakotan5m
+    uv run python source_polygonize.py jpshakotan5m 4

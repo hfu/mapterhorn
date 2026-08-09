@@ -1,0 +1,10 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# 10m fallback layer for jpsapporo1, same scope (see that entry's
+# Justfile for the exact bounds and reasoning). 9 files, all currently
+# published (queried via `aws s3 ls --profile source-coop`).
+# source_to_cog.py deliberately skipped, same reasoning as jpsapporo1.
+[no-cd]
+default:
+    uv run python source_download.py jpsapporo10m
+    uv run python source_bounds.py jpsapporo10m
+    uv run python source_polygonize.py jpsapporo10m 4

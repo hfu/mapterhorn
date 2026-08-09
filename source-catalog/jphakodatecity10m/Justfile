@@ -1,0 +1,10 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# 10m fallback layer for jphakodatecity1, same scope (see that entry's
+# Justfile for the exact bounds and reasoning). 20 files, all currently
+# published (queried via `aws s3 ls --profile source-coop`).
+# source_to_cog.py deliberately skipped, same reasoning as jphakodatecity1.
+[no-cd]
+default:
+    uv run python source_download.py jphakodatecity10m
+    uv run python source_bounds.py jphakodatecity10m
+    uv run python source_polygonize.py jphakodatecity10m 4

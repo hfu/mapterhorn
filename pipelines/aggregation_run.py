@@ -23,16 +23,22 @@ def get_worker_count():
 def run(filepath):
     filename = filepath.split('/')[-1]
     item = filename.replace('-aggregation.csv', '')
+    # aggregation_id scopes tmp_folder so a different run can never resume
+    # a stale folder left by an earlier run at the same z-x-y-maxzoom
+    # coordinates with different source composition (see DECISIONS.md D12's
+    # update: this was upstream's own pre-Manager/Worker behavior, dropped by
+    # 6cdf66b's global `tmp-store/{item}` layout).
+    aggregation_id = filepath.split('/')[-2]
     if os.path.isfile(f'{filepath}.done'):
         print(f'Aggregation item {item} already done. Skipping...')
         return
     print(f'{item} start')
-    tmp_folder = f'tmp-store/{item}'
+    tmp_folder = f'tmp-store/{aggregation_id}/{item}'
     os.makedirs(tmp_folder, exist_ok=True)
     aggregation_reproject.reproject(filepath, tmp_folder)
     aggregation_merge.merge(filepath, tmp_folder)
     aggregation_tile.main(filepath, tmp_folder)
-    # shutil.rmtree(tmp_folder)
+    shutil.rmtree(tmp_folder)
     os.rename(f'{filepath}.todo', f'{filepath}.done')
     print(f'{item} end')
 

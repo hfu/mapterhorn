@@ -1,0 +1,17 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# Real (non-trial) coverage for all of Hakodate City, superseding the
+# jphakodatetrial1/5m/10m peninsula-only trial (kept, not deleted --
+# still useful as a small smoke test). Scope is an approximation, not a
+# real administrative boundary (none available in this environment):
+# lon 140.55-141.20, lat 41.70-42.00, derived from mesh-block
+# reconnaissance (1st-level blocks 6240 R4-7/C4-7 + 6241 R4-7/C0-2) and
+# cross-checked against real published file bounds on
+# smartmaps/japan-geotiff-dem. 1,114 files, all currently published
+# (queried directly via `aws s3 ls --profile source-coop`, not guessed).
+# source_to_cog.py deliberately skipped (LERC re-encode not needed for
+# already-tiled/compressed input, see japan-geotiff-dem's DECISIONS.md).
+[no-cd]
+default:
+    uv run python source_download.py jphakodatecity1
+    uv run python source_bounds.py jphakodatecity1
+    uv run python source_polygonize.py jphakodatecity1 4

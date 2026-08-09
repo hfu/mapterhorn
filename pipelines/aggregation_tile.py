@@ -101,6 +101,17 @@ def main(filepath, tmp_folder):
     out_folder = utils.get_pmtiles_folder(x, y, z)
     utils.create_folder(out_folder)
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
+    # Remove stale prior-generation output at this exact macrotile position (same
+    # z-x-y, different child_z) so bundle.py's unconditional
+    # glob('pmtiles-store/*.pmtiles' + '*/*.pmtiles') never mixes an old run's
+    # now-superseded archive in alongside this run's current one -- pmtiles-store
+    # is otherwise never cleaned between runs (DECISIONS.md D12's open question).
+    # get_pmtiles_folder() buckets by z7 parent, so out_folder can hold many
+    # unrelated macrotiles' files; the z-x-y-prefixed glob (not out_folder-wide)
+    # keeps this scoped to just this position's own prior generations.
+    for stale_filepath in glob(f'{out_folder}/{z}-{x}-{y}-*.pmtiles'):
+        if stale_filepath != out_filepath:
+            os.remove(stale_filepath)
     create_tiles(tmp_folder, aggregation_tile, tiff_filepath, buffer_pixels)
     utils.create_archive(tmp_folder, out_filepath)
     utils.run_command(f'touch {pmtiles_done_filepath}')
