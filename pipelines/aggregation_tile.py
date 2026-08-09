@@ -9,6 +9,16 @@ import rasterio
 
 import utils
 
+# 'terrarium' (default): elevation sources, lossless Terrarium RGB encoding
+# (upstream's original behavior). 'rgb': orthophoto/imagery sources, lossy
+# RGB WebP encoding (added in 5eaa737 for the Freetown orthophoto project --
+# see FORK_NOTES.md section B). Elevation sources must not go through the
+# 'rgb' path: it clips raw elevation floats into an 8-bit 0-255 range with no
+# Terrarium encoding at all, destroying sub-meter precision and, combined
+# with Terrarium's ~257x decode amplification per RGB unit, turning every
+# whole-meter quantization step into a fake multi-hundred-meter cliff.
+TILE_ENCODING = os.environ.get('TILE_ENCODING', 'terrarium')
+
 def create_tiles(tmp_folder, aggregation_tile, tiff_filepath, buffer_pixels):
     base_x = aggregation_tile.x
     base_y = aggregation_tile.y
@@ -43,16 +53,25 @@ def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
     subdata = None
     mask_data = None
     with rasterio.open(tiff_filepath) as src:
-        if src.count >= 3:
+        if TILE_ENCODING == 'terrarium':
+            subdata = src.read(1, window=window, out_shape=(512, 512))
+        elif src.count >= 3:
             subdata = src.read([1, 2, 3], window=window, out_shape=(3, 512, 512))
             subdata = subdata.transpose((1, 2, 0))
         else:
             subdata = src.read(1, window=window, out_shape=(512, 512))
-        # Read mask (nodata/alpha) for this window only - dataset_mask() always
-        # returns an array, so read it windowed rather than probing full-res first.
-        mask_data = src.dataset_mask(window=window, out_shape=(512, 512))
-        mask_data = mask_data.astype(np.float32) / 255.0
-    utils.save_rgb_tile(subdata, out_filepath, mask_data=mask_data)
+        if TILE_ENCODING != 'terrarium':
+            # Read mask (nodata/alpha) for this window only - dataset_mask() always
+            # returns an array, so read it windowed rather than probing full-res first.
+            mask_data = src.dataset_mask(window=window, out_shape=(512, 512))
+            mask_data = mask_data.astype(np.float32) / 255.0
+
+    if TILE_ENCODING == 'terrarium':
+        valid_mask = subdata != -9999
+        subdata[subdata == -9999] = 0
+        utils.save_terrarium_tile(subdata, out_filepath, valid_mask=valid_mask)
+    else:
+        utils.save_rgb_tile(subdata, out_filepath, mask_data=mask_data)
 
 def main(filepath, tmp_folder):
     filename = filepath.split('/')[-1]

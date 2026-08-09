@@ -4,6 +4,7 @@ import time
 import sys
 import json
 import os
+from multiprocessing import Pool
 
 import mercantile
 from pmtiles.tile import zxy_to_tileid, TileType, Compression
@@ -186,6 +187,24 @@ def get_name_from_parent(parent):
         name = f'{parent.z}-{parent.x}-{parent.y}'
     return name
 
+def get_worker_count():
+    """Get worker count with graceful defaults (same convention as
+    AGGREGATION_WORKERS/DOWNSAMPLING_WORKERS)."""
+    if 'BUNDLE_WORKERS' in os.environ:
+        try:
+            return int(os.environ['BUNDLE_WORKERS'])
+        except ValueError:
+            pass
+    # Default: 4 workers (half of typical 8-core hardware, avoids saturating CPU/disk)
+    return 4
+
+def bundle_one(args):
+    parent, filepaths = args
+    name = get_name_from_parent(parent)
+    print(name)
+    create_archive(filepaths, name)
+    return name
+
 def main():
     num_aggregations = None
     if len(sys.argv) == 2:
@@ -194,13 +213,17 @@ def main():
     else:
         print('Not enough arguments. Usage: bundle.py {{num_aggregations}}')
         exit()
-    
+
     dirty_only = False  # Bundling all files (not just dirty) to include new downsampling tiles
     parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations)
-    for parent in parent_to_filepaths:
-        name = get_name_from_parent(parent)
-        print(name)
-        create_archive(parent_to_filepaths[parent], name)
+
+    # Each parent writes to its own bundle-store/{name}.pmtiles + meta-store/bundle/{name}.json --
+    # fully independent, no shared state, so safe to fan out across processes (unlike the
+    # sequential loop this replaces, which left slate's other 9 cores idle during a real run).
+    worker_count = get_worker_count()
+    print(f'using {worker_count} workers (set BUNDLE_WORKERS to override)')
+    with Pool(processes=worker_count) as pool:
+        pool.map(bundle_one, parent_to_filepaths.items())
 
     print(f'The following {len(parent_to_filepaths.keys())} file(s) were created:')
     for parent in parent_to_filepaths.keys():

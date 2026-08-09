@@ -14,3 +14,5 @@ data
 *.log
 *.log.*
 .DS_Store
+tmp-store
+source-store-sea-setaside

@@ -15,6 +15,14 @@ from pmtiles.reader import Reader, MmapSource
 
 import utils
 
+# See aggregation_tile.py for the full explanation. Overview/parent tiles
+# built here are just a 2x2-block average of already-encoded child tiles;
+# for Terrarium data that average is exact (elevation is linear in R/G/B),
+# but the result must still be written back out losslessly -- otherwise the
+# same whole-meter-quantization-becomes-a-cliff problem reappears one layer
+# up the pyramid.
+TILE_ENCODING = os.environ.get('TILE_ENCODING', 'terrarium')
+
 # Geographic center for prioritization (default: Freetown, Sierra Leone)
 # Override with environment variables: CENTER_LAT, CENTER_LON
 DEFAULT_CENTER_LAT = 8.465  # Freetown latitude
@@ -229,9 +237,48 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             except Exception as e:
                 pass
 
-    parent_rgba = full_data.reshape((512, 2, 512, 2, 4)).mean(axis=(1, 3)).astype(np.uint8)
+    if TILE_ENCODING == 'terrarium':
+        # Matches upstream mapterhorn/mapterhorn's own downsampling exactly
+        # (decode each child to real elevation, average the elevations, then
+        # re-derive R/G/B from that single averaged number via floor
+        # division/modulo -- see upstream's create_tile()), extended with
+        # alpha-weighting since upstream's own version has no nodata concept
+        # at all (it assumes full coverage, true for its real global runs;
+        # not true for this project's sparse trial data -- see below).
+        #
+        # An earlier version of this function averaged the already-encoded
+        # R/G/B *bytes* per channel independently, reasoning that Terrarium's
+        # decode is linear so channel-wise averaging should equal
+        # decode-then-average. That's true in exact arithmetic, but the
+        # final `.astype(uint8)` (later `np.round().astype(uint8)`) was
+        # applied per channel -- which risks a channel average landing right
+        # at a digit boundary (e.g. G averaging to 255.6) and either
+        # truncating a whole unit or, with rounding, overflowing to 256,
+        # neither of which upstream's approach can produce: re-deriving R/G/B
+        # from one scalar averaged elevation via floor-division/modulo always
+        # yields internally-consistent, in-range digits by construction.
+        # Rewritten to match, since the earlier approach was a plausible
+        # source of the seam/staircase artifact this was meant to fix.
+        blocks = full_data.reshape((512, 2, 512, 2, 4))
+        weight = blocks[..., 3] / 255.0  # (512, 2, 512, 2)
+        elevation = blocks[..., 0] * 256.0 + blocks[..., 1] + blocks[..., 2] / 256.0 - 32768.0
+        weight_sum = weight.sum(axis=(1, 3))  # (512, 512)
+        weighted_elevation = (elevation * weight).sum(axis=(1, 3))
+        safe_weight_sum = np.maximum(weight_sum, 1e-9)
+        avg_elevation = weighted_elevation / safe_weight_sum
+        avg_elevation = np.where(weight_sum > 0, avg_elevation, 0)
+        avg_alpha = np.round(weight_sum / 4.0 * 255.0).astype(np.uint8)
 
-    parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=False, level=80)
+        data = avg_elevation + 32768.0
+        parent_rgba = np.zeros((512, 512, 4), dtype=np.uint8)
+        parent_rgba[..., 0] = data // 256
+        parent_rgba[..., 1] = np.floor(data % 256)
+        parent_rgba[..., 2] = np.floor((data - np.floor(data)) * 256)
+        parent_rgba[..., 3] = avg_alpha
+        parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=True)
+    else:
+        parent_rgba = full_data.reshape((512, 2, 512, 2, 4)).mean(axis=(1, 3)).astype(np.uint8)
+        parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=False, level=80)
     parent_filepath = f'{tmp_folder}/{parent_z}-{parent_x}-{parent_y}.webp'
     with open(parent_filepath, 'wb') as f:
         f.write(parent_bytes)

@@ -13,7 +13,22 @@ import imagecodecs
 from pmtiles.tile import zxy_to_tileid, tileid_to_zxy, TileType, Compression
 from pmtiles.writer import Writer
 
-macrotile_z = 17
+# Upstream's original value is 12. 4bf6e535 raised it to 17 globally as a
+# safety cap for a ~4cm/px (maxzoom~21) Freetown orthophoto source, whose
+# gap from macrotile_z=12 would have made aggregation_reproject.py try to
+# materialize a ~256GiB raster per macrotile. That's the right fix for a
+# z21 source, but applied unconditionally it also forces every 1m
+# elevation source (maxzoom 17) into macrotile_z==maxzoom -- i.e. one
+# macrotile per single output tile, with no room for
+# aggregation_covering.py to group a sensible contiguous area into one
+# reprojection. Each macrotile is warped independently with only a small
+# (150-unit) edge buffer, and cubicspline's resampling kernel needs
+# neighboring pixels outside that buffer for a truly seamless result --
+# plausible root cause of the seam/staircase artifact seen only below the
+# native zoom. terrarium mode restores upstream's 12 (still >=
+# num_overviews below our own maxzoom 17, so the pyramid range is
+# unaffected); rgb/orthophoto mode keeps the 17 safety cap unchanged.
+macrotile_z = 12 if os.environ.get('TILE_ENCODING', 'terrarium') == 'terrarium' else 17
 macrotile_buffer_3857 = 150
 num_overviews = 6
 
@@ -47,28 +62,36 @@ def get_aggregation_ids():
 def get_vertical_rounding_multiplier(z):
     return int(2 ** ((10 - z) / 2) / (1 / 256))
 
-def save_terrarium_tile(data, filepath):
+def save_terrarium_tile(data, filepath, valid_mask=None):
+    """`valid_mask` (bool array, same shape as `data`, True = real data) is
+    encoded as an alpha channel so gaps (no source coverage at all -- not
+    the same as a small internal hole already filled by priority-merge)
+    survive as nodata through downsampling's tile pyramid, instead of
+    silently becoming a fake elevation of 0m that then contaminates a
+    weighted average with neighboring real data. `None` means "fully
+    valid" (whole-tile alpha=255), for callers with no gap information."""
     filename = filepath.split('/')[-1]
     z = int(filename.split('-')[0])
 
     # full terrarium resolution of 1/256 at `full_resolution_zoom`
     # multiples of 2 of full terrarium resolution at lower zooms
     full_resolution_zoom = 19
-    factor = 2 ** (full_resolution_zoom - z) / 256 
+    factor = 2 ** (full_resolution_zoom - z) / 256
     data = np.round(data / factor) * factor
 
     data += 32768
-    rgb = np.zeros((512, 512, 3), dtype=np.uint8)
+    rgba = np.zeros((512, 512, 4), dtype=np.uint8)
     np.seterr(all='raise')
     try:
-        rgb[..., 0] = data // 256
-        rgb[..., 1] = data % 256
-        rgb[..., 2] = (data - np.floor(data)) * 256
+        rgba[..., 0] = data // 256
+        rgba[..., 1] = data % 256
+        rgba[..., 2] = (data - np.floor(data)) * 256
     except FloatingPointError:
         print(f'FloatingPointError raised in {filepath}')
         raise FloatingPointError()
+    rgba[..., 3] = 255 if valid_mask is None else np.where(valid_mask, 255, 0).astype(np.uint8)
     with open(filepath, 'wb') as f:
-        f.write(imagecodecs.webp_encode(rgb, lossless=True))
+        f.write(imagecodecs.webp_encode(rgba, lossless=True))
 
 def save_rgb_tile(rgb_data, filepath, mask_data=None):
     """Save orthophoto RGB tile as WebP with optional alpha channel from mask.

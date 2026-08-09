@@ -1,0 +1,17 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# Two N41/N42 x E140 1-degree Copernicus GLO-30 tiles covering the
+# Hakodate/Goryokaku trial area and its surrounding sea -- a low-priority
+# global fallback (maxzoom forced down to macrotile_z=12 by
+# aggregation_covering.py, well below the 1m/5m/10m trial sources' 17,
+# so it can never win their equal-maxzoom tie-break) so that open ocean
+# renders as real (near-0m) elevation instead of nodata. Mirrors how
+# upstream Mapterhorn's own published data blends sea in -- see
+# mapterhorn-japan-bridge's DECISIONS.md D11 for the investigation that
+# led here. Filtered from the full source-catalog/glo30 (24,674 global
+# tiles) rather than reusing that entry directly, so a bridge run never
+# accidentally pulls the whole planet.
+[no-cd]
+default:
+    uv run python source_download.py jphakodatetrialsea
+    uv run python source_bounds.py jphakodatetrialsea
+    uv run python source_polygonize.py jphakodatetrialsea 4

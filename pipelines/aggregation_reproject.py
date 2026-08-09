@@ -10,6 +10,16 @@ import utils
 SILENT = True
 FAIL_ON_WARNING = False
 
+# See aggregation_tile.py for the encoding half of this same story.
+# 5eaa737 also swapped this warp step's resampling from upstream's
+# '-r cubicspline' + '-dstnodata -9999' to '-r lanczos' with no explicit
+# dstnodata, tuned for orthophoto imagery (Lanczos favors crisp photo
+# detail, at the cost of ringing/overshoot near sharp discontinuities --
+# exactly what elevation mesh-tile seams and buffer edges produce, and a
+# plausible source of the vertical-banding artifact seen in real output).
+# Elevation sources should use upstream's original values.
+TILE_ENCODING = os.environ.get('TILE_ENCODING', 'terrarium')
+
 def create_virtual_raster(tmp_folder, i, source_items):
     source = source_items[0]['source']
     vrt_filepath = f'{tmp_folder}/{i}.vrt'
@@ -39,7 +49,11 @@ def create_warp(vrt_filepath, vrt_3857_filepath, zoom, aggregation_tile, buffer)
     command += '-t_srs EPSG:3857 '
     command += f'-tr {resolution} {resolution} '
     command += f'-te {left} {bottom} {right} {top} '
-    command += '-r lanczos '
+    if TILE_ENCODING == 'terrarium':
+        command += '-r cubicspline '
+        command += '-dstnodata -9999 '
+    else:
+        command += '-r lanczos '
     command += f'{vrt_filepath} {vrt_3857_filepath}'
     out, err = utils.run_command(command, silent=SILENT)
     if err.strip() != '' and FAIL_ON_WARNING:
