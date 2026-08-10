@@ -1,0 +1,34 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# Real (non-trial) coverage for the growing Kyushu/Okinawa 1m dataset --
+# originally created 2026-08-10 as a throwaway end-to-end pipeline
+# speed-validation source for the aalto->slate migration (see
+# HANDOVER.md), then repurposed the same day into the real bridge
+# source-catalog entry for this region, per Hidenori's own "no strong
+# reason not to let it become the real entry" call -- kept the
+# jpkyushutest1 name to avoid re-downloading under a new name.
+#
+# Not geographically cropped -- covers every mesh position published
+# under smartmaps/japan-geotiff-dem/1/ whose 1st-level JIS mesh code
+# falls in the empirically-confirmed Kyushu/Okinawa range 3900-5199
+# (vs. Hokkaido's 6100-6899). 71,577 unique positions as of this
+# writing, deduplicated by keeping only the newest survey date per
+# position (SC's sync is additive-only; multiple dates coexist for the
+# same mesh -- same dedup logic as jpshakotan1/jphakodatecity1, see
+# DECISIONS.md). Only 49 of the 71,577 positions reflect the current
+# 2026-06-03 Kyushu/Okinawa DEM1A refresh so far -- the rest are older
+# (pre-refresh) survey dates; file_list.txt will need periodic
+# regeneration as more of the refresh lands on Source Cooperative and
+# gets synced (see japan-geotiff-dem's own HANDOVER.md for that
+# pipeline's progress).
+#
+# No 5m/10m fallback entry built yet for this region (unlike
+# jphakodatecity5m/10m, jpsapporo5m/10m, jpshakotan5m/10m) -- deferred
+# given the much larger scale here; expect 1m-only coverage gaps at
+# this pass. No sea-crop entry either (c.f. jphakodatetrialsea,
+# jpsapporosea, jpshakotansea) -- same reasoning, follow-up work.
+# source_to_cog.py deliberately skipped, same reasoning as jpsapporo1.
+[no-cd]
+default:
+    uv run python source_download.py jpkyushutest1
+    uv run python source_bounds.py jpkyushutest1
+    uv run python source_polygonize.py jpkyushutest1 4
