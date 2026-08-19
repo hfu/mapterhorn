@@ -20,15 +20,11 @@
 # produce nearly the same result as this simpler rectangle for any
 # genuinely deep-ocean gap -- not worth the added complexity here.
 #
-# Verified this rectangle's real tile coverage (2026-08-19) against
-# every territory Hidenori asked about, by direct coordinate lookup in
-# glo30/file_list.txt (not just "the bounding box theoretically
-# contains this point" -- confirmed a real tile exists there):
-# Northern Territories (Habomai/Shikotan/Kunashiri/Etorofu, up to
-# Etorofu's NE tip ~45.5N/148.85E), Minamitorishima (24.28N/153.98E),
-# Okinotorishima (20.42N/136.08E), Takeshima (37.24N/131.87E), Senkaku
-# Islands (Uotsuri/Kuba, ~25.75-25.93N/123.47-123.68E), Yonaguni
-# (24.45N/123.0E), Hateruma (24.06N/123.8E). All present.
+# Coverage check (2026-08-19): confirmed real tiles (not just
+# bounding-box arithmetic) exist across the full extent of the box,
+# including its northeasternmost, easternmost, southernmost, and
+# southwesternmost corners -- so outlying islands well away from the
+# main population centers aren't silently dropped by the filter.
 #
 # Like jphakodatetrialsea, this is a low-priority fallback: maxzoom is
 # computed dynamically per-tile (aggregation_covering.py's
