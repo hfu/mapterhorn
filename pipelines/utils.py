@@ -4,6 +4,7 @@ from glob import glob
 import math
 import os
 import hashlib
+import re
 
 import numpy as np
 
@@ -214,6 +215,23 @@ def get_pmtiles_folder(x, y, z):
         parent = mercantile.parent(mercantile.Tile(x=x, y=y, z=z), zoom=7)
         return f'pmtiles-store/{parent.z}-{parent.x}-{parent.y}'
 
+# GSI's own DEM naming embeds a product-type letter after the resolution
+# digits (e.g. ...-DEM5A-, ...-DEM10B-): A = airborne laser (LiDAR,
+# highest accuracy), B/C = photogrammetry-derived fallbacks used where no
+# LiDAR survey exists yet (20cm/40cm GSD respectively for the 5m tier).
+# Lower rank = higher accuracy = should win when two product types cover
+# the same cell. Sources with no such suffix (e.g. jpnationalsea's
+# Copernicus GLO-30 files) get the same rank as the highest tier, since
+# there is only ever one product type per cell for those.
+PRODUCT_TYPE_RANK = {'A': 0, 'B': 1, 'C': 2}
+PRODUCT_TYPE_PATTERN = re.compile(r'-DEM\d+([A-C])-')
+
+def get_product_type_rank(filename):
+    m = PRODUCT_TYPE_PATTERN.search(filename)
+    if m:
+        return PRODUCT_TYPE_RANK[m.group(1)]
+    return 0
+
 # group source items by maxzoom and source
 def get_grouped_source_items(filepath):
     lines = []
@@ -227,6 +245,7 @@ def get_grouped_source_items(filepath):
         line_tuples.append((
             -maxzoom,
             source,
+            -get_product_type_rank(filename),
             filename
         ))
     line_tuples = sorted(line_tuples)
@@ -237,7 +256,7 @@ def get_grouped_source_items(filepath):
     current_group = [{
         'maxzoom': -first_line_tuple[0],
         'source': first_line_tuple[1],
-        'filename': first_line_tuple[2],
+        'filename': first_line_tuple[3],
     }]
     for line_tuple in line_tuples[1:]:
         current_group_signature = (line_tuple[0], line_tuple[1])
@@ -248,7 +267,7 @@ def get_grouped_source_items(filepath):
         current_group.append({
             'maxzoom': -line_tuple[0],
             'source': line_tuple[1],
-            'filename': line_tuple[2],
+            'filename': line_tuple[3],
         })
     grouped_source_items.append(current_group)
     return grouped_source_items
