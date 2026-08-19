@@ -5,7 +5,7 @@
 # HANDOVER.md), then repurposed the same day into the real bridge
 # source-catalog entry for this region, per Hidenori's own "no strong
 # reason not to let it become the real entry" call -- kept the
-# jpkyushutest1 name to avoid re-downloading under a new name.
+# jpnational1 name to avoid re-downloading under a new name.
 #
 # Not geographically cropped -- covers every mesh position published
 # under smartmaps/japan-geotiff-dem/1/ whose 1st-level JIS mesh code
@@ -29,6 +29,6 @@
 # source_to_cog.py deliberately skipped, same reasoning as jpsapporo1.
 [no-cd]
 default:
-    uv run python source_download.py jpkyushutest1
-    uv run python source_bounds.py jpkyushutest1
-    uv run python source_polygonize.py jpkyushutest1 4
+    uv run python source_download.py jpnational1
+    uv run python source_bounds.py jpnational1
+    uv run python source_polygonize.py jpnational1 4
