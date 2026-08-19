@@ -1,2 +1,0 @@
-https://data.source.coop/smartmaps/japan-geotiff-dem/10/FG-GML-6240-55-dem10b-20161001.tif
-https://data.source.coop/smartmaps/japan-geotiff-dem/10/FG-GML-6240-56-dem10b-20161001.tif

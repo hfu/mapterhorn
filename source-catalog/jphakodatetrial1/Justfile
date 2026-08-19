@@ -1,9 +1,0 @@
-# Source preparation pipeline to be run from mapterhorn/pipelines folder.
-# Trial entry -- source_to_cog.py deliberately skipped (LERC re-encode
-# not needed for already-tiled/compressed input, see japan-geotiff-dem's
-# DECISIONS.md discussion from 2026-08-08).
-[no-cd]
-default:
-    uv run python source_download.py jphakodatetrial1
-    uv run python source_bounds.py jphakodatetrial1
-    uv run python source_polygonize.py jphakodatetrial1 4

@@ -1,0 +1,13 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+# 5m fallback layer for jpkyushutest1, same scope (see that entry's
+# Justfile for reasoning) -- not geographically cropped, covers every
+# published mesh position in the Kyushu/Okinawa 1st-level JIS mesh
+# range 3900-5199. 91,595 unique positions, deduplicated by newest
+# survey date per position (same logic as the 1m layer and
+# jpshakotan5m).
+# source_to_cog.py deliberately skipped, same reasoning as jpsapporo1.
+[no-cd]
+default:
+    uv run python source_download.py jpnational5
+    uv run python source_bounds.py jpnational5
+    uv run python source_polygonize.py jpnational5 4

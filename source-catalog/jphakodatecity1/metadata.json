@@ -1,9 +1,0 @@
-{
-    "name": "基盤地図情報（数値標高モデル）函館市全域 1m",
-    "website": "https://source.coop/smartmaps/japan-geotiff-dem",
-    "license": "国土地理院コンテンツ利用規約／測量法に基づく国土地理院長承認（複製）R8JHf51",
-    "producer": "国土交通省国土地理院",
-    "producer_short": "GSI",
-    "resolution": 1.0,
-    "access_year": 2026
-}
