@@ -219,10 +219,11 @@ def get_pmtiles_folder(x, y, z):
 # digits (e.g. ...-DEM5A-, ...-DEM10B-): A = airborne laser (LiDAR,
 # highest accuracy), B/C = photogrammetry-derived fallbacks used where no
 # LiDAR survey exists yet (20cm/40cm GSD respectively for the 5m tier).
-# Lower rank = higher accuracy = should win when two product types cover
-# the same cell. Sources with no such suffix (e.g. jpnationalsea's
-# Copernicus GLO-30 files) get the same rank as the highest tier, since
-# there is only ever one product type per cell for those.
+# Lower rank = higher accuracy = should be tried first. Sources with no
+# such suffix (e.g. jpnationalsea's Copernicus GLO-30 files) get rank 0,
+# since there is only ever one product type per cell for those -- rank
+# is meaningless as a priority signal there, only used to keep the group
+# key well-defined.
 PRODUCT_TYPE_RANK = {'A': 0, 'B': 1, 'C': 2}
 PRODUCT_TYPE_PATTERN = re.compile(r'-DEM\d+([A-C])-')
 
@@ -232,7 +233,17 @@ def get_product_type_rank(filename):
         return PRODUCT_TYPE_RANK[m.group(1)]
     return 0
 
-# group source items by maxzoom and source
+# Group source items by (maxzoom, source, product-type rank), in that
+# priority order -- e.g. for a tile covered by jpnational1/jpnational5
+# (a mix of DEM5A/5B/5C)/jpnational10 (DEM10A/10B)/jpnationalsea, this
+# produces up to seven groups in priority order: 1, 5a, 5b, 5c, 10a,
+# 10b, sea (DECISIONS.md D20). Each group is now guaranteed a single
+# product type, so aggregation_reproject.py's per-group gdalbuildvrt
+# call never has to arbitrate between different-accuracy files anymore
+# -- that arbitration now happens via aggregation_merge.py's existing
+# per-pixel nodata-fill + Gaussian-blurred-seam compositing across
+# groups (the same mechanism already used for 1m vs 5m vs 10m vs sea),
+# reused as-is since it already handles an arbitrary number of groups.
 def get_grouped_source_items(filepath):
     lines = []
     with open(filepath) as f:
@@ -245,21 +256,21 @@ def get_grouped_source_items(filepath):
         line_tuples.append((
             -maxzoom,
             source,
-            -get_product_type_rank(filename),
+            get_product_type_rank(filename),
             filename
         ))
     line_tuples = sorted(line_tuples)
     grouped_source_items = []
 
     first_line_tuple = line_tuples[0]
-    last_group_signature = (first_line_tuple[0], first_line_tuple[1])
+    last_group_signature = (first_line_tuple[0], first_line_tuple[1], first_line_tuple[2])
     current_group = [{
         'maxzoom': -first_line_tuple[0],
         'source': first_line_tuple[1],
         'filename': first_line_tuple[3],
     }]
     for line_tuple in line_tuples[1:]:
-        current_group_signature = (line_tuple[0], line_tuple[1])
+        current_group_signature = (line_tuple[0], line_tuple[1], line_tuple[2])
         if current_group_signature != last_group_signature:
             grouped_source_items.append(current_group)
             current_group = []
