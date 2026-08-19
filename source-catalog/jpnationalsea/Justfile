@@ -1,0 +1,50 @@
+# Source preparation pipeline to be run from mapterhorn/pipelines folder.
+#
+# National-scope sea/ocean fallback for the JCI 2026-09 effort (see
+# mapterhorn-japan-bridge's HANDOVER.md/DECISIONS.md). Successor to the
+# small Hakodate-area `jphakodatetrialsea` pilot (D11) that proved the
+# mechanism -- see that decision's investigation for why GLO-30 (not a
+# separate bathymetry source) is the right choice: upstream mapterhorn's
+# own published data uses GLO-30 as its universal land+sea fallback too
+# (confirmed by reading upstream's source-catalog directly), and GLO-30
+# reports near-0m for open water, verified non-corrupt across all zoom
+# levels in the pilot.
+#
+# 275 of `source-catalog/glo30`'s 24,674 global 1x1-degree tiles,
+# filtered to a generous rectangular bounding box (lat 20-46N, lon
+# 122-154E) rather than a precise EEZ polygon -- chosen because GLO-30's
+# own tile inventory already appears to exclude pure-open-ocean tiles
+# with no land content (24,674/64,800 possible global cells is
+# consistent with land+coastal-adjacent coverage only, not literally
+# every ocean cell), so a precise EEZ polygon filter would likely
+# produce nearly the same result as this simpler rectangle for any
+# genuinely deep-ocean gap -- not worth the added complexity here.
+#
+# Verified this rectangle's real tile coverage (2026-08-19) against
+# every territory Hidenori asked about, by direct coordinate lookup in
+# glo30/file_list.txt (not just "the bounding box theoretically
+# contains this point" -- confirmed a real tile exists there):
+# Northern Territories (Habomai/Shikotan/Kunashiri/Etorofu, up to
+# Etorofu's NE tip ~45.5N/148.85E), Minamitorishima (24.28N/153.98E),
+# Okinotorishima (20.42N/136.08E), Takeshima (37.24N/131.87E), Senkaku
+# Islands (Uotsuri/Kuba, ~25.75-25.93N/123.47-123.68E), Yonaguni
+# (24.45N/123.0E), Hateruma (24.06N/123.8E). All present.
+#
+# Like jphakodatetrialsea, this is a low-priority fallback: maxzoom is
+# computed dynamically per-tile (aggregation_covering.py's
+# get_smallest_overzoom), and GLO-30's real ~30m resolution computes to
+# roughly z9-13 depending on latitude (see that script's own comments:
+# S79->9, N66->10, N50->11, N49->12) -- always well below the 1m
+# sources' z16, so it can never win their equal-maxzoom priority
+# tie-break (D8) and never gets built up to a wastefully high zoom
+# either; downsampling only ever builds *down* from each tile's own
+# computed maxzoom, never up to match a neighboring higher-res source.
+#
+# Explicitly deferred/low-priority per Hidenori (2026-08-19): this
+# entry is prepared but not yet downloaded -- the core aalto GeoTIFF
+# DEM upload work takes precedence over starting this download.
+[no-cd]
+default:
+    uv run python source_download.py jpnationalsea
+    uv run python source_bounds.py jpnationalsea
+    uv run python source_polygonize.py jpnationalsea 4
