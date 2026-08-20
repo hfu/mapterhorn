@@ -26,11 +26,9 @@ aggregation-store/{aggregation_id}/{z}-{x}-{y}-{child_z}-aggregation.csv
 (same file aggregation_run.py itself consumes).
 """
 import argparse
-import json
 import shutil
 import tempfile
 from glob import glob
-from pathlib import Path
 
 import numpy as np
 import rasterio
