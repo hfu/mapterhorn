@@ -6,7 +6,7 @@
 
 Public terrain tiles for interactive web map visualizations
 
-> **⚠️ Fork Note**: This is a fork of [mapterhorn/mapterhorn](https://github.com/mapterhorn/mapterhorn) adapted for **orthophoto/RGB workflows** (aerial/satellite imagery) instead of elevation data. For upstream's terrain-focused version, see [https://github.com/mapterhorn/mapterhorn](https://github.com/mapterhorn/mapterhorn). See [`FORK_NOTES.md`](FORK_NOTES.md) for what's different and why.
+> **⚠️ Fork Note**: This is a fork of [mapterhorn/mapterhorn](https://github.com/mapterhorn/mapterhorn), used here for two purposes: (1) **orthophoto/RGB workflows** (aerial/satellite imagery) instead of elevation data — see [`FORK_NOTES.md`](FORK_NOTES.md) for what's different there and why; and (2) a **national-scale elevation pipeline for Japan** (standard Terrarium encoding, same as upstream), built on GSI's 基盤地図情報 DEM data across six source product types with a seven-tier priority merge — see [`hfu/mapterhorn-japan-bridge`](https://github.com/hfu/mapterhorn-japan-bridge) for the docs/viewer, and that repo's own `DECISIONS.md` (D11 onward) for the pipeline decisions. For upstream's own version, see [https://github.com/mapterhorn/mapterhorn](https://github.com/mapterhorn/mapterhorn).
 
 ## Viewer
 
