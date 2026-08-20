@@ -66,7 +66,7 @@ def create_warp(vrt_filepath, vrt_3857_filepath, zoom, aggregation_tile, buffer)
 def translate(in_filepath, out_filepath):
     command = 'GDAL_CACHEMAX=64 GDAL_NUM_THREADS=1 gdal_translate --config GDAL_MAX_DATASET_POOL_SIZE 1 -of COG '
     command += '-co BIGTIFF=IF_NEEDED -co ADD_ALPHA=YES -co OVERVIEWS=NONE '
-    command += '-co SPARSE_OK=YES -co BLOCKSIZE=512 -co COMPRESS=ZSTD -co ZSTD_LEVEL=1 '
+    command += '-co SPARSE_OK=YES -co BLOCKSIZE=512 -co COMPRESS=ZSTD -co LEVEL=1 '
     command += f'{in_filepath} '
     command += f'{out_filepath}'
     out, err = utils.run_command(command, silent=SILENT)
