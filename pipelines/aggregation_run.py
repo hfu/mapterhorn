@@ -1,4 +1,5 @@
 from glob import glob
+import random
 import shutil
 import os
 from multiprocessing import Pool
@@ -48,7 +49,19 @@ def main():
     aggregation_id = aggregation_ids[-1]
 
     dirty_filepaths = [filepath.replace('.todo', '') for filepath in glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv.todo')]
-    
+
+    # .todo files were created in geographically-sorted order (write_aggregation_todos()
+    # iterates a sorted glob), and directory listing order on APFS tends to preserve
+    # that -- so without shuffling, nearby tiles (often similarly source-dense/cheap
+    # or source-sparse/expensive, since terrain/coverage complexity is spatially
+    # correlated) land on the same handful of workers back to back. Observed in
+    # practice: all 4 AGGREGATION_WORKERS getting stuck on the same expensive
+    # geographic cluster (multiple adjacent z10 tiles each needing 1000+ source
+    # files merged) while plenty of cheap tiles elsewhere sat untouched, leaving
+    # CPU mostly idle despite "4 workers" running. Shuffling interleaves expensive
+    # and cheap items across the pool so a few hard tiles can't stall the whole run.
+    random.shuffle(dirty_filepaths)
+
     if len(dirty_filepaths) == 0:
         print('nothing to do.')
     else:
