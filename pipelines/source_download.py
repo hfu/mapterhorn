@@ -6,8 +6,7 @@ import utils
 
 
 def load_manifest(source):
-    csv_path = Path(f'../source-catalog/{source}/file_list.csv')
-    with open(csv_path, newline='') as f:
+    with utils.open_manifest(source) as f:
         return list(csv.DictReader(f))
 
 

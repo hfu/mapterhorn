@@ -1,4 +1,5 @@
 import subprocess
+import gzip
 from pathlib import Path
 from glob import glob
 import math
@@ -316,3 +317,30 @@ def japan_quadrans_of(lon, lat):
     if lon <= 32 + 100:  # 132 deg E (quadrans_script.rb: x <= 32)
         return 'south'
     return 'west'
+
+
+# Manifest source-catalog file_list.csv[.gz] opener (mapterhorn-japan-bridge
+# DECISIONS.md D26). Prefers the gzip-compressed form -- large national-scope
+# manifests (jpnational1/5, hundreds of thousands of rows) exceed GitHub's
+# 50MB recommended file-size threshold as plain CSV; gzip shrinks this
+# highly-repetitive URL-list text dramatically. Falls back to a plain .csv
+# for any source not yet converted, so this is backward compatible.
+def open_manifest(source):
+    gz_path = Path(f'../source-catalog/{source}/file_list.csv.gz')
+    csv_path = Path(f'../source-catalog/{source}/file_list.csv')
+    if gz_path.is_file():
+        return gzip.open(gz_path, 'rt', newline='')
+    return open(csv_path, newline='')
+
+def manifest_path_glob():
+    """All source-catalog dirs with either manifest form, source name only."""
+    names = set()
+    for p in Path('../source-catalog').glob('*/file_list.csv.gz'):
+        names.add(p.parent.name)
+    for p in Path('../source-catalog').glob('*/file_list.csv'):
+        names.add(p.parent.name)
+    return sorted(names)
+
+def manifest_exists(source):
+    return (Path(f'../source-catalog/{source}/file_list.csv.gz').is_file()
+            or Path(f'../source-catalog/{source}/file_list.csv').is_file())

@@ -11,12 +11,13 @@ import csv
 import sys
 from pathlib import Path
 
+import utils
+
 
 def count_manifest_rows(source):
-    csv_path = Path(f'../source-catalog/{source}/file_list.csv')
-    if not csv_path.exists():
+    if not utils.manifest_exists(source):
         return None
-    with open(csv_path, newline='') as f:
+    with utils.open_manifest(source) as f:
         return sum(1 for _ in csv.DictReader(f))
 
 
@@ -31,9 +32,7 @@ def main():
     if len(sys.argv) > 1:
         sources = sys.argv[1:]
     else:
-        sources = sorted(
-            p.parent.name for p in Path('../source-catalog').glob('*/file_list.csv')
-        )
+        sources = utils.manifest_path_glob()
 
     if not sources:
         print('No sources with a file_list.csv found.')
