@@ -55,6 +55,8 @@ def merge(filepath, tmp_folder):
                 tiled=True,
                 blockxsize=512,
                 blockysize=512,
+                compress='ZSTD',
+                zstd_level=1,
             )
             
             with rasterio.open(output_path, 'w', **profile) as dst:

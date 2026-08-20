@@ -31,6 +31,25 @@ DEFAULT_CENTER_LON = -13.234  # Freetown longitude
 CENTER_LAT = float(os.environ.get('CENTER_LAT', DEFAULT_CENTER_LAT))
 CENTER_LON = float(os.environ.get('CENTER_LON', DEFAULT_CENTER_LON))
 
+# 'proximity' (default): sort by distance from CENTER_LAT/CENTER_LON, this
+# file's original behavior (tuned for compact regions like Freetown).
+# 'quadrans': sort by japan_quadrans_of()'s North/South/East/West priority
+# instead -- a better geographic fit for an elongated archipelago, where
+# radial distance from one point is a poor proxy for "process this next".
+# See mapterhorn-japan-bridge DECISIONS.md D24/D25.
+PRIORITY_MODE = os.environ.get('PRIORITY_MODE', 'proximity')
+
+# Hole-avoidance (mapterhorn-japan-bridge DECISIONS.md D25): default off,
+# preserving this file's original behavior of proceeding (with just a
+# warning) even when some referenced child PMTiles are missing, which
+# silently bakes a permanent gap into the output (see create_tile()'s own
+# comment on why this happens). When enabled, an item with any missing
+# child is skipped entirely (not marked done) instead, so it's picked up
+# again once genuinely ready on a later run -- the intended mode for any
+# run that publishes incremental output before the full generation
+# finishes aggregating.
+DOWNSAMPLING_STRICT = bool(int(os.environ.get('DOWNSAMPLING_STRICT', 0)))
+
 def get_worker_count():
     """Get worker count with graceful defaults"""
     # Environment variable override
@@ -171,7 +190,8 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
 
 def sort_files_by_proximity(filepaths, center_lat=CENTER_LAT, center_lon=CENTER_LON):
-    """Sort files: by zoom level (high first), then by distance from center"""
+    """Sort files: by zoom level (high first), then by priority mode
+    (distance from center, or Japan quadrans order)"""
     def sort_key(filepath):
         filename = filepath.split('/')[-1]
         z, x, y, child_zoom = [int(a) for a in filename.replace('-downsampling.csv', '').split('-')]
@@ -182,14 +202,19 @@ def sort_files_by_proximity(filepaths, center_lat=CENTER_LAT, center_lon=CENTER_
         tile_lat = (bounds.north + bounds.south) / 2
         tile_lon = (bounds.east + bounds.west) / 2
 
-        distance = calculate_distance(tile_lat, tile_lon, center_lat, center_lon)
-
         # Sort: by output zoom descending (child_zoom = the level this item
-        # BUILDS, not the coarser extent-grouping zoom z), then by distance.
-        # This must process every level's builder before anything that reads
-        # its output, or create_tile() silently skips missing inputs and
-        # marks the item .done anyway - producing a permanently incomplete
-        # tile with no retry.
+        # BUILDS, not the coarser extent-grouping zoom z), then by the
+        # selected priority mode. Processing every level's builder before
+        # anything that reads its output matters more than ever with
+        # DOWNSAMPLING_STRICT unset -- create_tile() silently skips missing
+        # inputs and marks the item .done anyway, producing a permanently
+        # incomplete tile with no retry.
+        if PRIORITY_MODE == 'quadrans':
+            quadrant = utils.japan_quadrans_of(tile_lon, tile_lat)
+            quadrant_priority = utils.JAPAN_QUADRANS_PRIORITY[quadrant]
+            return (-child_zoom, quadrant_priority)
+
+        distance = calculate_distance(tile_lat, tile_lon, center_lat, center_lon)
         return (-child_zoom, distance)
 
     return sorted(filepaths, key=sort_key)
@@ -332,6 +357,10 @@ def main(filepaths):
 
         if missing_files:
             print(f'WARNING: {len(missing_files)} PMTiles files not found: {missing_files[:3]}...')
+            if DOWNSAMPLING_STRICT:
+                print('DOWNSAMPLING_STRICT set -- children not all ready, skipping '
+                      '(not marking done; will retry on a future run).')
+                continue
 
         parents = None
         if extent_z == parent_zoom:

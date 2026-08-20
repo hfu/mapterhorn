@@ -296,3 +296,23 @@ class HashWriter:
         return self.f.flush()
     def close(self):
         return self.f.close()
+
+
+# Japan-specific quadrant classifier for downsampling priority ordering
+# (mapterhorn-japan-bridge DECISIONS.md D25). Translates
+# japan-geotiff-dem/scripts/quadrans_script.rb's mesh-code-based
+# North/East/South/West split into direct lon/lat thresholds, using the
+# JIS 1st-order mesh grid's own defining formula (mesh code y -> latitude
+# = y * 2/3 deg; mesh code x -> longitude = x + 100 deg), since aggregation
+# items here are indexed by mercator tile z/x/y, not GSI mesh codes, and
+# have no mesh code of their own to classify directly.
+JAPAN_QUADRANS_PRIORITY = {'north': 0, 'south': 1, 'east': 2, 'west': 3}
+
+def japan_quadrans_of(lon, lat):
+    if lat >= 62 * (2.0 / 3.0):  # ~41.333 deg N (quadrans_script.rb: y >= 62)
+        return 'north'
+    if lon >= 38 + 100:  # 138 deg E (quadrans_script.rb: x >= 38)
+        return 'east'
+    if lon <= 32 + 100:  # 132 deg E (quadrans_script.rb: x <= 32)
+        return 'south'
+    return 'west'
