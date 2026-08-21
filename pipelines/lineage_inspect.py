@@ -42,6 +42,17 @@ import utils
 # Distinct hues per resolution family (blue=1m, green=5m shades,
 # orange=10m shades, grey=sea) so a glance shows both "which family"
 # and "which product type within it" won.
+#
+# Keyed by GLOBAL tier, not by a group's position in one tile's own
+# get_grouped_source_items() list -- most tiles don't have all seven
+# tiers present (e.g. no 5C data for that cell), so the list is a
+# subsequence of the full seven, not always starting at tier 0. Coloring
+# by list position instead of global tier silently relabels every group
+# after the first gap (e.g. a tile missing 5B/5C/10A would have its real
+# `sea` group land on list index 2 and get painted 5B's green) -- found
+# by inspecting real D20 sample output, where a jpnational1/jpnationalsea
+# tile's ocean half rendered in 10a's orange. Fixed by mapping every
+# group through GLOBAL_TIER before indexing PALETTE.
 PALETTE = {
     -1: (255, 255, 255),  # nodata -> white
     0: (30, 60, 200),     # 1m (DEM1A) -> blue
@@ -52,6 +63,30 @@ PALETTE = {
     5: (240, 190, 120),   # 10b (DEM10B) -> light orange
     6: (150, 150, 150),   # sea (GLO-30) -> grey
 }
+
+# (source, product-type rank) -> global tier index, matching this
+# project's own seven-tier priority order (DECISIONS.md D20): 1, 5a, 5b,
+# 5c, 10a, 10b, sea. jpnationalsea has no product-type letter, so its
+# rank is always utils.PRODUCT_TYPE_RANK's fallback, 0.
+GLOBAL_TIER = {
+    ('jpnational1', 0): 0,
+    ('jpnational5', 0): 1,
+    ('jpnational5', 1): 2,
+    ('jpnational5', 2): 3,
+    ('jpnational10', 0): 4,
+    ('jpnational10', 1): 5,
+    ('jpnationalsea', 0): 6,
+}
+
+
+def group_product_type_rank(group):
+    return utils.get_product_type_rank(group[0]['filename'])
+
+
+def global_tier_of(group):
+    source = group[0]['source']
+    rank = group_product_type_rank(group)
+    return GLOBAL_TIER.get((source, rank))
 
 
 def group_label(group):
@@ -87,11 +122,19 @@ def compute_provenance(filepath, tmp_folder):
     return provenance, num_tiff_files
 
 
-def provenance_to_rgb(provenance):
+def provenance_to_rgb(provenance, groups):
+    """`provenance` holds each pixel's LOCAL group-list index (or -1);
+    map through global_tier_of() before looking up PALETTE so a tile
+    missing some tiers doesn't shift every later group onto the wrong
+    color (see PALETTE's own comment)."""
     h, w = provenance.shape
     out = np.zeros((h, w, 3), dtype=np.uint8)
     for val in np.unique(provenance):
-        color = PALETTE.get(int(val), (255, 0, 255))  # magenta = unexpected >6 tiers
+        if val == -1:
+            color = PALETTE[-1]
+        else:
+            tier = global_tier_of(groups[val])
+            color = PALETTE.get(tier, (255, 0, 255))  # magenta = unrecognized (source, rank)
         out[provenance == val] = color
     return out
 
@@ -106,7 +149,7 @@ def main():
     groups = utils.get_grouped_source_items(filepath)
     print(f'{len(groups)} priority group(s) for this tile:')
     for i, group in enumerate(groups):
-        print(f'  {i}: {group_label(group)} ({len(group)} file(s))')
+        print(f'  {i}: {group_label(group)} ({len(group)} file(s)) [global tier {global_tier_of(group)}]')
 
     tmp_folder = tempfile.mkdtemp(prefix='lineage-inspect-')
     try:
@@ -123,7 +166,7 @@ def main():
         label = 'nodata' if val == -1 else group_label(groups[val])
         print(f'  {label}: {count} px ({100*count/total:.1f}%)')
 
-    rgb = provenance_to_rgb(provenance)
+    rgb = provenance_to_rgb(provenance, groups)
     Image.fromarray(rgb).save(args.out)
     print(f'Wrote {args.out}')
 
