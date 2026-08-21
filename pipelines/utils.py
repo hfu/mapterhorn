@@ -226,12 +226,19 @@ def get_pmtiles_folder(x, y, z):
 # is meaningless as a priority signal there, only used to keep the group
 # key well-defined.
 PRODUCT_TYPE_RANK = {'A': 0, 'B': 1, 'C': 2}
-PRODUCT_TYPE_PATTERN = re.compile(r'-DEM\d+([A-C])-')
+# Case-insensitive: most GSI filenames use uppercase (DEM5A/DEM10B), but
+# some older (pre-~2018) vintages use lowercase (dem5b/dem10b) -- 6,676
+# such files found across source-store this session. The pattern used to
+# be uppercase-only, silently falling through to rank 0 (the same rank as
+# tier-A/highest-accuracy) for every lowercase file -- misclassifying
+# real tier-B/C data as if unranked. See mapterhorn-japan-bridge
+# DECISIONS.md D28.
+PRODUCT_TYPE_PATTERN = re.compile(r'-DEM\d+([A-C])-', re.IGNORECASE)
 
 def get_product_type_rank(filename):
     m = PRODUCT_TYPE_PATTERN.search(filename)
     if m:
-        return PRODUCT_TYPE_RANK[m.group(1)]
+        return PRODUCT_TYPE_RANK[m.group(1).upper()]
     return 0
 
 # Group source items by (maxzoom, source, product-type rank), in that
