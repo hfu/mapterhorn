@@ -22,7 +22,7 @@ def get_parent_to_filepaths(only_dirty, num_aggregations):
     for filepath in filepaths:
         filename = filepath.split('/')[-1]
         z, x, y, child_z = [int(a) for a in filename.replace('.pmtiles', '').split('-')]
-        
+
         parent = None
         # child_z here is the zoom level of the tiles inside this specific pmtiles-store
         # archive, not utils.macrotile_z (the aggregation covering grid zoom) - the two are
@@ -40,7 +40,7 @@ def get_parent_to_filepaths(only_dirty, num_aggregations):
                 parent = mercantile.Tile(x=x, y=y, z=z)
             else:
                 parent = mercantile.parent(mercantile.Tile(x=x, y=y, z=z), zoom=6)
-        
+
         if only_dirty and parent not in dirty_parents:
             continue
 
@@ -61,7 +61,7 @@ def get_dirty_parents(num_aggregations):
         current_aggregation_id = aggregation_ids[-1 - offset]
         last_aggregation_id = None if len(aggregation_ids) == 1 else aggregation_ids[-2 - offset]
         aggregation_filenames = utils.get_dirty_aggregation_filenames(current_aggregation_id, last_aggregation_id)
-        
+
         for filename in aggregation_filenames:
             z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
             if child_z >= 13:
@@ -91,7 +91,7 @@ def create_archive(filepaths, name):
     with open(out_filepath, 'wb') as f1:
         hash_writer = utils.HashWriter(f1)
         writer = Writer(hash_writer)
-        
+
         tile_ids_and_filepaths = []
 
         j = 0
@@ -107,7 +107,7 @@ def create_archive(filepaths, name):
             for tile in tiles:
                 tile_id = zxy_to_tileid(tile.z, tile.x, tile.y)
                 tile_ids_and_filepaths.append((tile_id, filepath))
-        
+
             max_z = max(max_z, child_z)
             min_z = min(min_z, child_z)
             west, south, east, north = mercantile.bounds(x, y, z)
@@ -120,7 +120,7 @@ def create_archive(filepaths, name):
                 print(f'prepared {j:_} / {len(filepaths):_} filepaths...')
 
         tile_ids_and_filepaths = sorted(tile_ids_and_filepaths)
-        
+
         last_filepath = None
         tile_id_to_bytes = None
 
@@ -217,13 +217,31 @@ def main():
     dirty_only = False  # Bundling all files (not just dirty) to include new downsampling tiles
     parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations)
 
+    # bundle_one() has no internal parallelism -- one region is one atomic,
+    # single-threaded task (create_archive()'s writer needs tile-id-sorted
+    # order, so the write side can't fan out across workers). With few
+    # regions and a handful of workers, Pool.map's default chunksize groups
+    # tasks in glob/dict-insertion order, not by size -- observed directly
+    # on slate (mapterhorn-japan-bridge DECISIONS.md, bundle capacity
+    # measurement): a 23-region run left one worker idle after finishing
+    # several small regions while the other worker was still 64 minutes
+    # into the one region holding 430,856 tiles, because that region
+    # wasn't the first task handed out. Largest-first with chunksize=1
+    # is classic longest-processing-time-first scheduling -- near-optimal
+    # for minimizing makespan across identical workers, and cheap here
+    # since len(filepaths) is already known before any work starts (a
+    # source-file count, not the true tile count, but a reasonable proxy
+    # without re-reading every archive just to sort them).
+    parent_items = sorted(
+        parent_to_filepaths.items(), key=lambda item: len(item[1]), reverse=True)
+
     # Each parent writes to its own bundle-store/{name}.pmtiles + meta-store/bundle/{name}.json --
     # fully independent, no shared state, so safe to fan out across processes (unlike the
     # sequential loop this replaces, which left slate's other 9 cores idle during a real run).
     worker_count = get_worker_count()
     print(f'using {worker_count} workers (set BUNDLE_WORKERS to override)')
     with Pool(processes=worker_count) as pool:
-        pool.map(bundle_one, parent_to_filepaths.items())
+        pool.map(bundle_one, parent_items, chunksize=1)
 
     print(f'The following {len(parent_to_filepaths.keys())} file(s) were created:')
     for parent in parent_to_filepaths.keys():
