@@ -57,7 +57,7 @@ def main():
         print(f'[{datetime.now()}] publish cycle starting')
 
         run('uv run python3 downsampling_run.py',
-            extra_env={'PRIORITY_MODE': 'quadrans', 'DOWNSAMPLING_STRICT': '1'})
+            extra_env={'PRIORITY_MODE': 'quadrans', 'DOWNSAMPLING_STRICT': '1', 'DOWNSAMPLING_WORKERS': '3'})
 
         run('uv run python3 bundle.py 1', extra_env={'BUNDLE_WORKERS': '2'})
 
