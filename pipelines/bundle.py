@@ -129,8 +129,32 @@ def create_archive(filepaths, name):
         for tile_id, filepath in tile_ids_and_filepaths:
             if filepath != last_filepath:
                 last_filepath = filepath
-                tile_id_to_bytes = read_full_archive(filepath)
-            writer.write_tile(tile_id, tile_id_to_bytes[tile_id])
+                # filepath was glob'd well before this point (get_parent_to_filepaths
+                # runs once, up front, but a single create_archive() call can take
+                # well over an hour for a large parent) -- aggregation_run.py running
+                # concurrently (D32's operating model) may have since reprocessed this
+                # exact position and replaced the file under a new name (its filename
+                # encodes maxzoom, which can change between reprocessings). A same-path
+                # overwrite would survive; a rename cannot (mapterhorn-japan-bridge
+                # DECISIONS.md D37, first observed there, still unfixed until now).
+                # Swapping in the new file isn't safe here -- its content is decomposed
+                # at a different zoom than the tile_ids already computed for the stale
+                # filename in the prep loop above, so its tile IDs wouldn't match.
+                # Skipping is: this parent's bundle is very slightly incomplete for
+                # this one cycle, but bundle.py always does a full fresh pass
+                # (dirty_only=False), so the next publish_cycle re-globs and includes
+                # it correctly -- same self-healing shape as DOWNSAMPLING_STRICT's own
+                # skip-and-retry-next-time pattern elsewhere in this pipeline.
+                try:
+                    tile_id_to_bytes = read_full_archive(filepath)
+                except FileNotFoundError:
+                    print(f'WARNING: {filepath} no longer exists -- likely overwritten '
+                          f'by a concurrent aggregation_run.py reprocess mid-bundle. '
+                          f'Skipping its tiles this cycle; will be picked up correctly '
+                          f'on the next publish_cycle run.', flush=True)
+                    tile_id_to_bytes = {}
+            if tile_id in tile_id_to_bytes:
+                writer.write_tile(tile_id, tile_id_to_bytes[tile_id])
 
             j += 1
             if j % 10_000 == 0:
