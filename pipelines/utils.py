@@ -124,7 +124,19 @@ def save_rgb_tile(rgb_data, filepath, mask_data=None):
             f.write(encoded)
 
 def create_archive(tmp_folder, out_filepath):
-    with open(out_filepath, 'wb') as f1:
+    # Write to a same-directory temp path and os.replace() into place at the very
+    # end, rather than writing out_filepath directly -- this function streams tiles
+    # in and only writes the pmtiles header/directory at finalize(), so a direct
+    # write leaves out_filepath sitting on disk (isfile() == True) but incomplete/
+    # unparseable for the whole duration of this call. A concurrent reader (bundle.py,
+    # downsampling_run.py's own create_tile()) opening it during that window gets a
+    # corrupt-read exception instead of a clean "not there yet" signal -- a second,
+    # harder-to-catch variant of the same race documented in mapterhorn-japan-bridge
+    # DECISIONS.md D37/D44. os.replace() on the same filesystem is atomic: readers
+    # only ever see either the untouched old file (or nothing) or the fully-written
+    # new one, never a partial state.
+    tmp_out_filepath = f'{out_filepath}.tmp-{os.getpid()}'
+    with open(tmp_out_filepath, 'wb') as f1:
         writer = Writer(f1)
         min_z = math.inf
         max_z = 0
@@ -180,6 +192,8 @@ def create_archive(tmp_folder, out_filepath):
                 'attribution': '<a href="https://mapterhorn.com/attribution">© Mapterhorn</a>'
             },
         )
+
+    os.replace(tmp_out_filepath, out_filepath)
 
 def get_aggregation_item_string(aggregation_id, filename):
     result = ''

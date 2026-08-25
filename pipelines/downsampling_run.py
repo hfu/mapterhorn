@@ -50,6 +50,19 @@ PRIORITY_MODE = os.environ.get('PRIORITY_MODE', 'proximity')
 # finishes aggregating.
 DOWNSAMPLING_STRICT = bool(int(os.environ.get('DOWNSAMPLING_STRICT', 0)))
 
+class ChildPmtilesUnavailable(Exception):
+    """Raised by create_tile() when a child pmtiles file this item's own
+    downsampling.csv explicitly referenced isn't there (or isn't readable)
+    at read time -- distinct from a child tile that's legitimately outside
+    this item's coverage (get_tile_to_pmtiles_filename() never listed it in
+    the first place, which is silently and correctly skipped, not this).
+    A referenced-but-missing file almost always means aggregation_run.py's
+    concurrent reprocessing renamed/replaced it mid-read (mapterhorn-japan-
+    bridge DECISIONS.md D37/D44's race, same root cause as bundle.py's own
+    now-fixed crash) -- main() catches this and skips the whole item
+    without marking it done, rather than silently completing it with a
+    permanent hole no future run would ever retry."""
+
 def get_worker_count():
     """Get worker count with graceful defaults"""
     # Environment variable override
@@ -237,30 +250,36 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
             filepath = f'{pmtiles_folder}/{filename}'
 
-            # Skip if PMTiles file is missing (incomplete aggregation)
+            # filename came from this item's own downsampling.csv, written once by
+            # downsampling_covering.py -- unlike the `child not in
+            # tile_to_pmtiles_filename` case above (legitimate: this child tile
+            # genuinely isn't covered by anything), this file is expected to exist.
+            # If it's missing here, aggregation_run.py's concurrent reprocessing has
+            # very likely renamed/replaced it mid-read (see this function's own
+            # ChildPmtilesUnavailable docstring). Raise rather than silently
+            # continue -- letting this be treated as "no data for this quadrant"
+            # would let main() mark the whole item .done with a permanent,
+            # unretried hole in it.
             if not os.path.isfile(filepath):
-                continue
+                raise ChildPmtilesUnavailable(f'{filepath} (referenced in this item, expected present) not found')
 
-            try:
-                with open(filepath, 'r+b') as f:
-                    reader = Reader(MmapSource(f))
-                    child_bytes = reader.get(child_z, child_x, child_y)
-                if child_bytes:
-                    child_img = np.array(Image.open(io.BytesIO(child_bytes)), dtype=np.float32)
-                    row_start = 512 * row_offset
-                    row_end = 512 * (row_offset + 1)
-                    col_start = 512 * col_offset
-                    col_end = 512 * (col_offset + 1)
-                    # Handle RGBA or RGB
-                    if child_img.ndim == 2:
-                        child_img = np.stack([child_img, child_img, child_img, np.ones_like(child_img)*255], axis=2)
-                    elif child_img.shape[2] == 3:
-                        alpha = np.ones((child_img.shape[0], child_img.shape[1], 1)) * 255
-                        child_img = np.dstack([child_img, alpha])
-                    full_data[row_start:row_end, col_start:col_end] = child_img
-                    tiles_found += 1
-            except Exception as e:
-                pass
+            with open(filepath, 'r+b') as f:
+                reader = Reader(MmapSource(f))
+                child_bytes = reader.get(child_z, child_x, child_y)
+            if child_bytes:
+                child_img = np.array(Image.open(io.BytesIO(child_bytes)), dtype=np.float32)
+                row_start = 512 * row_offset
+                row_end = 512 * (row_offset + 1)
+                col_start = 512 * col_offset
+                col_end = 512 * (col_offset + 1)
+                # Handle RGBA or RGB
+                if child_img.ndim == 2:
+                    child_img = np.stack([child_img, child_img, child_img, np.ones_like(child_img)*255], axis=2)
+                elif child_img.shape[2] == 3:
+                    alpha = np.ones((child_img.shape[0], child_img.shape[1], 1)) * 255
+                    child_img = np.dstack([child_img, alpha])
+                full_data[row_start:row_end, col_start:col_end] = child_img
+                tiles_found += 1
 
     if TILE_ENCODING == 'terrarium':
         # Matches upstream mapterhorn/mapterhorn's own downsampling exactly
@@ -376,8 +395,20 @@ def main(filepaths):
             argument_tuples.append((parent.x, parent.y, parent.z, aggregation_id, tmp_folder, pmtiles_filenames))
 
         worker_count = get_worker_count()
-        with Pool(processes=worker_count) as pool:
-            pool.starmap(create_tile, argument_tuples, chunksize=1)
+        try:
+            with Pool(processes=worker_count) as pool:
+                pool.starmap(create_tile, argument_tuples, chunksize=1)
+        except ChildPmtilesUnavailable as e:
+            # Same race as this item's own outer missing_files check above, just
+            # caught later -- a referenced file existed at that check but vanished
+            # (or got replaced) by the time a worker actually read it, almost
+            # certainly aggregation_run.py reprocessing it concurrently (D37/D44).
+            # Skip this item exactly like the outer check does: don't build/mark
+            # it, so a future run retries it once the position has settled.
+            print(f'WARNING: {e} -- skipping this item (not marking done; will '
+                  f'retry on a future run).')
+            shutil.rmtree(tmp_folder)
+            continue
 
         utils.create_archive(tmp_folder, out_filepath)
 
