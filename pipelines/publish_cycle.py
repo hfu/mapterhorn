@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""One incremental japan.pmtiles publish cycle: readiness-gated
-downsampling -> bundle -> merge -> rsync to `stars`.
+"""One incremental mapterhorn-japan-bridge.pmtiles publish cycle:
+readiness-gated downsampling -> bundle -> merge -> rsync to `stars`.
+(Named japan.pmtiles before mapterhorn-japan-bridge DECISIONS.md D46.)
 
 Operating-model decision (mapterhorn-japan-bridge DECISIONS.md, this
 session): `aggregation_run.py` runs continuously and is never paused for
@@ -63,7 +64,7 @@ def main():
 
         run('uv run python3 merge_japan_bundles.py')
 
-        run(f'rsync -av --progress bundle-store/japan.pmtiles {STARS_TARGET}')
+        run(f'rsync -av --progress bundle-store/mapterhorn-japan-bridge.pmtiles {STARS_TARGET}')
 
         print(f'[{datetime.now()}] publish cycle finished')
         return 0

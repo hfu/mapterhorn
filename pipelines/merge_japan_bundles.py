@@ -13,7 +13,7 @@ from pmtiles.reader import Reader, all_tiles
 from pmtiles.tile import TileType, Compression, zxy_to_tileid
 from pmtiles.writer import Writer
 
-OUTPUT = 'bundle-store/japan.pmtiles'
+OUTPUT = 'bundle-store/mapterhorn-japan-bridge.pmtiles'  # japan.pmtiles before mapterhorn-japan-bridge DECISIONS.md D46
 INPUTS = sorted(p for p in glob('bundle-store/*.pmtiles') if os.path.abspath(p) != os.path.abspath(OUTPUT))
 
 
