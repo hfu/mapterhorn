@@ -24,13 +24,30 @@ def merge(filepath, tmp_folder):
     if not os.path.isfile(metadata_filepath):
         print(f'{filepath} reprojection not done yet...')
         return
-    
-    num_tiff_files = len(glob(f'{tmp_folder}/*.tiff'))
+
+    output_path = f'{tmp_folder}/merged-3857.tiff'
+
+    # tmp_folder is never wiped between attempts at the same item
+    # (aggregation_run.py's own os.makedirs(tmp_folder, exist_ok=True)) -- if
+    # an earlier run wrote merged-3857.tiff but was interrupted before
+    # cleaning up the per-group *-3857.tiff inputs or touching merge-done
+    # (e.g. mid-run during D38's own ~7h blackout window), a naive restart's
+    # glob(f'{tmp_folder}/*.tiff') below would also match merged-3857.tiff
+    # itself, inflating the input count by one and crashing on a nonexistent
+    # "last" group tiff (aggregation_run_national hit exactly this on its
+    # final 3 items -- see mapterhorn-japan-bridge DECISIONS.md D48). Finish
+    # the interrupted cleanup instead of re-merging from scratch.
+    if os.path.isfile(output_path):
+        for stale_tiff in glob(f'{tmp_folder}/[0-9]*-3857.tiff'):
+            os.remove(stale_tiff)
+        utils.run_command(f'touch {done_filepath}')
+        return
+
+    num_tiff_files = len(glob(f'{tmp_folder}/[0-9]*-3857.tiff'))
 
     if num_tiff_files == 0:
         raise ValueError(f'failed to read tifs of {filepath}')
 
-    output_path = f'{tmp_folder}/merged-3857.tiff'
     if num_tiff_files == 1:
         os.rename(f'{tmp_folder}/0-3857.tiff', output_path)
         command = f'touch {done_filepath}'
