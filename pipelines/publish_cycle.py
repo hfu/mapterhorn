@@ -60,6 +60,17 @@ def main():
         run('uv run python3 downsampling_run.py',
             extra_env={'PRIORITY_MODE': 'quadrans', 'DOWNSAMPLING_STRICT': '1', 'DOWNSAMPLING_WORKERS': '3'})
 
+        # DECISIONS.md D53/D54: bundle.py never reads or writes bundle-
+        # store's own merged OUTPUT file (it only reads pmtiles-store and
+        # writes fresh per-region bundles) -- but the *old* merged output
+        # (up to ~290GB) sat there completely unused throughout bundle.py's
+        # own multi-hour run one night, pushing free space down to ~107Gi
+        # before merge_japan_bundles.py's own open(OUTPUT, 'wb') truncated
+        # it moments later anyway. Deleting it here, before bundle.py even
+        # starts, reclaims that headroom for the entire bundle+merge
+        # window instead of only from merge onward.
+        run('rm -f bundle-store/mapterhorn-japan-bridge.pmtiles')
+
         run('uv run python3 bundle.py 1', extra_env={'BUNDLE_WORKERS': '2'})
 
         run('uv run python3 merge_japan_bundles.py')
