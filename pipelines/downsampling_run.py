@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from glob import glob
 import io
 from multiprocessing import Pool
@@ -232,6 +233,38 @@ def sort_files_by_proximity(filepaths, center_lat=CENTER_LAT, center_lon=CENTER_
 
     return sorted(filepaths, key=sort_key)
 
+# Per-worker-process cache of open pmtiles Readers (mapterhorn-japan-bridge
+# DECISIONS.md D44/D56): coarse-zoom items were observed referencing the
+# same handful-of-hundred-MB pmtiles-store archive repeatedly across
+# nearby items -- each hit previously paid a fresh open()+mmap+directory-
+# parse. A module-level dict is safe here specifically because
+# multiprocessing's `spawn` start method (this file already relies on it,
+# D45) gives each worker its own fresh process and memory space -- no
+# cross-process sharing, no locking needed. Bounded (LRU) to avoid an
+# unbounded number of open file descriptors/mmaps over a run touching
+# thousands of distinct archives. Correctness note: this does NOT bypass
+# the ChildPmtilesUnavailable race-detection below -- callers must still
+# check os.path.isfile(filepath) fresh before calling this (as create_tile()
+# already did before this cache existed); the pipeline's own filename
+# convention (a changed maxzoom suffix, never a same-path overwrite, D37)
+# means a stale cache entry's path is never silently reoccupied by
+# different content, so no extra staleness check is needed here.
+_READER_CACHE_MAXSIZE = 16
+_reader_cache = OrderedDict()
+
+def get_cached_reader(filepath):
+    if filepath in _reader_cache:
+        entry = _reader_cache.pop(filepath)
+        _reader_cache[filepath] = entry  # move to most-recently-used end
+        return entry[1]
+    if len(_reader_cache) >= _READER_CACHE_MAXSIZE:
+        _, (old_f, _) = _reader_cache.popitem(last=False)  # evict least-recently-used
+        old_f.close()
+    f = open(filepath, 'r+b')
+    reader = Reader(MmapSource(f))
+    _reader_cache[filepath] = (f, reader)
+    return reader
+
 def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtiles_filenames):
     tile_to_pmtiles_filename = get_tile_to_pmtiles_filename(pmtiles_filenames)
     full_data = np.zeros((1024, 1024, 4), dtype=np.float32)  # RGBA (with alpha)
@@ -263,9 +296,8 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             if not os.path.isfile(filepath):
                 raise ChildPmtilesUnavailable(f'{filepath} (referenced in this item, expected present) not found')
 
-            with open(filepath, 'r+b') as f:
-                reader = Reader(MmapSource(f))
-                child_bytes = reader.get(child_z, child_x, child_y)
+            reader = get_cached_reader(filepath)
+            child_bytes = reader.get(child_z, child_x, child_y)
             if child_bytes:
                 child_img = np.array(Image.open(io.BytesIO(child_bytes)), dtype=np.float32)
                 row_start = 512 * row_offset
@@ -341,79 +373,91 @@ def get_tile_to_pmtiles_filename(pmtiles_filenames):
     return tile_to_pmtiles_filename
 
 def main(filepaths):
-    for j, filepath in enumerate(filepaths):
-        _, aggregation_id, filename = filepath.split('/')
-        print(f'downsampling {filename}. {datetime.now()}. {j + 1} / {len(filepaths)}.')
-        if os.path.isfile(filepath.replace("-downsampling.csv", "-downsampling.done")):
-            print('already done...')
-            continue
-        parts = filename.split('-')
-        extent_z, extent_x, extent_y, parent_zoom = [int(a) for a in parts[:4]]
+    # DECISIONS.md D56: a fresh Pool (and therefore fresh worker processes)
+    # used to be created for every single downsampling.csv item -- across
+    # thousands of items, that's thousands of process spawns, and it also
+    # meant get_cached_reader()'s own per-worker cache above could never
+    # help across items (only within one item's own handful of parent
+    # tiles), even though the slow segments observed in practice were
+    # dominated by the *same* large archive being reopened across
+    # consecutive-but-separate items. One Pool for the whole run lets
+    # worker-local caches actually pay off, and removes the per-item
+    # spawn/teardown cost. Exceptions raised inside pool.starmap() (e.g.
+    # ChildPmtilesUnavailable) propagate to the caller without killing the
+    # pool or its other workers, so it's safe to keep reusing it afterward.
+    worker_count = get_worker_count()
+    with Pool(processes=worker_count) as pool:
+        for j, filepath in enumerate(filepaths):
+            _, aggregation_id, filename = filepath.split('/')
+            print(f'downsampling {filename}. {datetime.now()}. {j + 1} / {len(filepaths)}.')
+            if os.path.isfile(filepath.replace("-downsampling.csv", "-downsampling.done")):
+                print('already done...')
+                continue
+            parts = filename.split('-')
+            extent_z, extent_x, extent_y, parent_zoom = [int(a) for a in parts[:4]]
 
-        out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z)
-        utils.create_folder(out_folder)
-        out_filepath = f'{out_folder}/{extent_z}-{extent_x}-{extent_y}-{parent_zoom}.pmtiles'
+            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z)
+            utils.create_folder(out_folder)
+            out_filepath = f'{out_folder}/{extent_z}-{extent_x}-{extent_y}-{parent_zoom}.pmtiles'
 
-        extent = mercantile.Tile(x=extent_x, y=extent_y, z=extent_z)
-        tmp_folder = filepath.replace('-downsampling.csv', '-tmp')
-        utils.create_folder(tmp_folder)
+            extent = mercantile.Tile(x=extent_x, y=extent_y, z=extent_z)
+            tmp_folder = filepath.replace('-downsampling.csv', '-tmp')
+            utils.create_folder(tmp_folder)
 
-        pmtiles_filenames = None
-        with open(filepath) as f:
-            pmtiles_filenames = f.readlines()
-            pmtiles_filenames = pmtiles_filenames[1:] # skip header
-            pmtiles_filenames = [a.strip() for a in pmtiles_filenames]
+            pmtiles_filenames = None
+            with open(filepath) as f:
+                pmtiles_filenames = f.readlines()
+                pmtiles_filenames = pmtiles_filenames[1:] # skip header
+                pmtiles_filenames = [a.strip() for a in pmtiles_filenames]
 
-        print(f'Referenced PMTiles files: {pmtiles_filenames[:3]}... (total: {len(pmtiles_filenames)})')
-        # Check if referenced files exist
-        missing_files = []
-        for pmtiles_filename in pmtiles_filenames:
-            file_z, file_x, file_y, _ = [int(a) for a in pmtiles_filename.replace('.pmtiles', '').split('-')]
-            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
-            filepath_check = f'{pmtiles_folder}/{pmtiles_filename}'
-            if not os.path.isfile(filepath_check):
-                missing_files.append(pmtiles_filename)
+            print(f'Referenced PMTiles files: {pmtiles_filenames[:3]}... (total: {len(pmtiles_filenames)})')
+            # Check if referenced files exist
+            missing_files = []
+            for pmtiles_filename in pmtiles_filenames:
+                file_z, file_x, file_y, _ = [int(a) for a in pmtiles_filename.replace('.pmtiles', '').split('-')]
+                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
+                filepath_check = f'{pmtiles_folder}/{pmtiles_filename}'
+                if not os.path.isfile(filepath_check):
+                    missing_files.append(pmtiles_filename)
 
-        if missing_files:
-            print(f'WARNING: {len(missing_files)} PMTiles files not found: {missing_files[:3]}...')
-            if DOWNSAMPLING_STRICT:
-                print('DOWNSAMPLING_STRICT set -- children not all ready, skipping '
-                      '(not marking done; will retry on a future run).')
+            if missing_files:
+                print(f'WARNING: {len(missing_files)} PMTiles files not found: {missing_files[:3]}...')
+                if DOWNSAMPLING_STRICT:
+                    print('DOWNSAMPLING_STRICT set -- children not all ready, skipping '
+                          '(not marking done; will retry on a future run).')
+                    continue
+
+            parents = None
+            if extent_z == parent_zoom:
+                parents = [extent]
+            else:
+                parents = list(mercantile.children(extent, zoom=parent_zoom))
+
+            # Optimize processing order for cache locality and file handle efficiency
+            parents = optimize_parent_processing_order(parents, pmtiles_filenames)
+
+            argument_tuples = []
+            for parent in parents:
+                argument_tuples.append((parent.x, parent.y, parent.z, aggregation_id, tmp_folder, pmtiles_filenames))
+
+            try:
+                pool.starmap(create_tile, argument_tuples, chunksize=1)
+            except ChildPmtilesUnavailable as e:
+                # Same race as this item's own outer missing_files check above, just
+                # caught later -- a referenced file existed at that check but vanished
+                # (or got replaced) by the time a worker actually read it, almost
+                # certainly aggregation_run.py reprocessing it concurrently (D37/D44).
+                # Skip this item exactly like the outer check does: don't build/mark
+                # it, so a future run retries it once the position has settled.
+                print(f'WARNING: {e} -- skipping this item (not marking done; will '
+                      f'retry on a future run).')
+                shutil.rmtree(tmp_folder)
                 continue
 
-        parents = None
-        if extent_z == parent_zoom:
-            parents = [extent]
-        else:
-            parents = list(mercantile.children(extent, zoom=parent_zoom))
+            utils.create_archive(tmp_folder, out_filepath)
 
-        # Optimize processing order for cache locality and file handle efficiency
-        parents = optimize_parent_processing_order(parents, pmtiles_filenames)
-
-        argument_tuples = []
-        for parent in parents:
-            argument_tuples.append((parent.x, parent.y, parent.z, aggregation_id, tmp_folder, pmtiles_filenames))
-
-        worker_count = get_worker_count()
-        try:
-            with Pool(processes=worker_count) as pool:
-                pool.starmap(create_tile, argument_tuples, chunksize=1)
-        except ChildPmtilesUnavailable as e:
-            # Same race as this item's own outer missing_files check above, just
-            # caught later -- a referenced file existed at that check but vanished
-            # (or got replaced) by the time a worker actually read it, almost
-            # certainly aggregation_run.py reprocessing it concurrently (D37/D44).
-            # Skip this item exactly like the outer check does: don't build/mark
-            # it, so a future run retries it once the position has settled.
-            print(f'WARNING: {e} -- skipping this item (not marking done; will '
-                  f'retry on a future run).')
             shutil.rmtree(tmp_folder)
-            continue
-
-        utils.create_archive(tmp_folder, out_filepath)
-
-        shutil.rmtree(tmp_folder)
-        utils.run_command(f'touch {filepath.replace("-downsampling.csv", "-downsampling.done")}')
+            utils.run_command(f'touch {filepath.replace("-downsampling.csv", "-downsampling.done")}')
 
 def tiles_intersect(a, b):
     if a == b:

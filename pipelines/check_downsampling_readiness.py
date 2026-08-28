@@ -15,36 +15,19 @@ Usage: python3 check_downsampling_readiness.py [--list-not-ready N]
 import argparse
 from glob import glob
 
-import mercantile
-
 import utils
-from downsampling_run import (
-    is_parent_of_dirty_aggregation_tile,
-    not_in_previous_aggregation,
-)
 
 
-def candidate_filepaths(aggregation_id, aggregation_ids):
-    dirty_aggregation_tiles = []
-    if len(aggregation_ids) >= 2:
-        dirty_aggregation_filenames = utils.get_dirty_aggregation_filenames(
-            aggregation_id, aggregation_ids[-2])
-        for filename in dirty_aggregation_filenames:
-            z, x, y, _ = [int(a) for a in
-                          filename.replace('-aggregation.csv', '').split('-')]
-            dirty_aggregation_tiles.append(mercantile.Tile(x=x, y=y, z=z))
-
-    result = []
-    for filepath in glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv'):
-        filename = filepath.split('/')[-1]
-        z, x, y, child_zoom = [int(a) for a in
-                                filename.replace('-downsampling.csv', '').split('-')]
-        if (len(aggregation_ids) < 2
-                or is_parent_of_dirty_aggregation_tile(
-                    mercantile.Tile(x=x, y=y, z=z), dirty_aggregation_tiles)
-                or not_in_previous_aggregation(filename, aggregation_ids)):
-            result.append(filepath)
-    return result
+def candidate_filepaths(aggregation_id):
+    # DECISIONS.md D51/D56: this used to re-derive downsampling_run.py's
+    # own __main__ dirty-filter (is_parent_of_dirty_aggregation_tile /
+    # not_in_previous_aggregation, comparing against aggregation_ids[-2]).
+    # That filter compared against an unrelated old test generation and
+    # silently excluded 68-78% of still-incomplete coarse-zoom items --
+    # D51 removed it from downsampling_run.py itself; removed here too so
+    # this report stays consistent with what a real run actually
+    # considers, rather than reproducing the same undercount.
+    return list(glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv'))
 
 
 def check_readiness(filepath):
@@ -74,7 +57,7 @@ def main():
 
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
-    filepaths = candidate_filepaths(aggregation_id, aggregation_ids)
+    filepaths = candidate_filepaths(aggregation_id)
 
     already_done = ready_not_done = not_ready = 0
     not_ready_examples = []
@@ -91,7 +74,7 @@ def main():
                     (filepath.split('/')[-1], missing, referenced))
 
     print(f'Active generation: {aggregation_id}')
-    print(f'Candidate downsampling items (dirty-filtered): {len(filepaths)}')
+    print(f'Candidate downsampling items: {len(filepaths)}')
     print(f'  already .done:        {already_done}')
     print(f'  ready, not yet run:   {ready_not_done}')
     print(f'  not ready (children missing): {not_ready}')
