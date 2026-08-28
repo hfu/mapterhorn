@@ -66,6 +66,19 @@ def main():
                     if total % 100000 == 0:
                         print(f'{total:_} tiles written...')
             print(f'done with {path}, total so far: {total:_}')
+            # DECISIONS.md D49/D53: without this, every already-consumed
+            # INPUTS file stays on disk for the rest of the run, coexisting
+            # with the pmtiles Writer's own scratch temp file (which itself
+            # needs ~1x the final archive's tile-data size until
+            # finalize()'s copy completes) -- together needing roughly 2x
+            # the archive's own size in headroom at peak, which drove
+            # `slate` to 13Gi free mid-run on 2026-08-28. Each `path` here
+            # has already been fully read (the `with` block above is
+            # closed), and `bundle.py` always rebuilds bundle-store fully
+            # (dirty_only=False, D44) every cycle regardless, so deleting
+            # it now costs nothing beyond a cheap regenerate if this script
+            # crashes later -- same trade this project already accepted.
+            os.remove(path)
 
         min_lon_e7 = int(min_lon * 1e7)
         min_lat_e7 = int(min_lat * 1e7)
