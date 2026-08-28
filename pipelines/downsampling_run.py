@@ -461,21 +461,29 @@ if __name__ == '__main__':
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
 
-    dirty_aggregation_tiles = []
-    if len(aggregation_ids) >= 2:
-        dirty_aggregation_filenames = utils.get_dirty_aggregation_filenames(aggregation_id, aggregation_ids[-2])
-        for filename in dirty_aggregation_filenames:
-            z, x, y, _ = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
-            dirty_aggregation_tiles.append(mercantile.Tile(x=x, y=y, z=z))
-
-    # Collect all processing files
-    all_files = []
-    for filepath in glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv'):
-        filename = filepath.split('/')[-1]
-        z, x, y, child_zoom = [int(a) for a in filename.replace('-downsampling.csv', '').split('-')]
-
-        if len(aggregation_ids) < 2 or is_parent_of_dirty_aggregation_tile(mercantile.Tile(x=x, y=y, z=z), dirty_aggregation_tiles) or not_in_previous_aggregation(filename, aggregation_ids):
-            all_files.append(filepath)
+    # mapterhorn-japan-bridge DECISIONS.md D50/D51: this dirty-tracking
+    # optimization (only reprocess downsampling items that changed
+    # relative to `aggregation_ids[-2]`) assumes `[-2]` is a genuine
+    # earlier version of the SAME-scope generation. In practice,
+    # `get_aggregation_ids()` returns every directory under
+    # `aggregation-store/`, and `[-2]` currently resolves to the old
+    # Kyushu-only test generation (`01M0FNHYXSAMNVTV430XD3XB5T`) -- an
+    # unrelated, differently-scoped run, not a prior pass over this
+    # national generation. Comparing against it silently excluded 68-78%
+    # of the still-incomplete z9-z11 items from ever being attempted
+    # (confirmed empirically: a sampled z11 item returned False for both
+    # `is_parent_of_dirty_aggregation_tile` and `not_in_previous_
+    # aggregation`), which was the dominant reason coarse-zoom
+    # downsampling wasn't converging -- not just slow throughput as D50
+    # first assumed. There is no genuine prior national-scope generation
+    # to diff against yet (this is the first one), so treat every item
+    # as needing an attempt, same as the `len(aggregation_ids) < 2`
+    # branch already did -- `.done` markers (checked inside `main()`)
+    # remain the real idempotency guard, so this loses no correctness,
+    # only the (currently broken) incremental-skip optimization. Revisit
+    # if/when a genuine second national-scope generation exists (号2)
+    # and this optimization's own intent becomes applicable again.
+    all_files = list(glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv'))
 
     # Sort by proximity to center (high zoom first, then by distance)
     sorted_files = sort_files_by_proximity(all_files, CENTER_LAT, CENTER_LON)
