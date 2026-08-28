@@ -57,6 +57,19 @@ def main():
     try:
         print(f'[{datetime.now()}] publish cycle starting')
 
+        # DECISIONS.md D37/D55: downsampling_run.py can only ever process
+        # what downsampling_covering.py has already enumerated as
+        # `*-downsampling.csv` candidates -- that step was never wired
+        # into this script, so it had to be run by hand once per
+        # generation (D37 first found this the hard way: a generation
+        # with zero candidate files silently downsamples nothing, no
+        # matter how much aggregation finishes). write_downsampling_items()
+        # starts with `rm aggregation-store/{id}/*-downsampling.csv` and
+        # fully regenerates the set, so it's safe and idempotent to run
+        # every cycle (measured ~13-20s at this generation's current
+        # scale -- negligible next to the other stages).
+        run('uv run python3 downsampling_covering.py')
+
         run('uv run python3 downsampling_run.py',
             extra_env={'PRIORITY_MODE': 'quadrans', 'DOWNSAMPLING_STRICT': '1', 'DOWNSAMPLING_WORKERS': '3'})
 

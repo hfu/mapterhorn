@@ -111,4 +111,11 @@ def write_downsampling_items():
 
 if __name__ == '__main__':
     write_downsampling_items()
-    write_downlsampling_todos()
+    # write_downlsampling_todos() deliberately not called: its own
+    # `.todo` output (mapterhorn-japan-bridge DECISIONS.md D55) is never
+    # read anywhere in this codebase (confirmed by grepping every .py
+    # file for `.todo` -- only aggregation_run.py's own, unrelated
+    # `*-aggregation.csv.todo` mechanism is real). Now that this script
+    # runs every publish cycle (D55), skip the wasted I/O. The function
+    # itself is left defined, not deleted, in case a future generation
+    # (号2) ever wires a real consumer to it.
