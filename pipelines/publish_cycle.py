@@ -64,6 +64,19 @@ def main():
 
         run('uv run python3 merge_japan_bundles.py')
 
+        # DECISIONS.md D50/D51: rsync's own delta-transfer algorithm keeps
+        # an open fd on the existing destination file as its basis for the
+        # whole transfer, so the old (still-being-served) archive and the
+        # growing new one coexist on `stars` for the entire duration --
+        # roughly 2x the archive's own size in headroom, which bit us live
+        # this session (ENOSPC ~20GB short of completing). Deleting the old
+        # file first removes the basis file entirely, so the transfer only
+        # ever needs 1x headroom. Trades a few hours of public-URL downtime
+        # (depot.optgeo.org / stars.optgeo.org 404 until the new file lands)
+        # for not needing permanent 2x disk headroom on an archive that
+        # only grows generation over generation (D40/D41).
+        run('ssh stars@stars.local rm -f /home/stars/data/mapterhorn-japan-bridge.pmtiles')
+
         run(f'rsync -av --progress bundle-store/mapterhorn-japan-bridge.pmtiles {STARS_TARGET}')
 
         print(f'[{datetime.now()}] publish cycle finished')
