@@ -101,7 +101,7 @@ def main():
         # only grows generation over generation (D40/D41).
         run('ssh stars@stars.local rm -f /home/stars/data/mapterhorn-japan-bridge.pmtiles')
 
-        run(f'rsync -av --progress bundle-store/mapterhorn-japan-bridge.pmtiles {STARS_TARGET}')
+        run(f'rsync -av --partial --progress bundle-store/mapterhorn-japan-bridge.pmtiles {STARS_TARGET}')
 
         print(f'[{datetime.now()}] publish cycle finished')
         return 0
