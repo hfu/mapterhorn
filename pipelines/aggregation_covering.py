@@ -178,18 +178,38 @@ def write_aggregation_items(macrotile_map, aggregation_tiles, aggregation_id):
             f.writelines(lines)
 
 def write_aggregation_todos():
+    # DECISIONS.md D51/D57: this used to compare the current generation's
+    # own aggregation.csv content against aggregation_ids[-2] (the old
+    # Kyushu-scope test generation) via get_dirty_aggregation_filenames(),
+    # and skip writing a .todo for any item judged "unchanged" -- on the
+    # assumption that unchanged content means the position is already
+    # correctly built. That assumption is false whenever the *older*
+    # generation itself never finished building that position: pmtiles-
+    # store is flat (not generation-scoped), so "unchanged since Kyushu"
+    # silently inherited every one of Kyushu's own incomplete positions
+    # forward, forever, into every later generation -- this is the same
+    # dirty-filter-against-an-unrelated-baseline pattern D51 already
+    # found and removed from downsampling_run.py, just with a more
+    # consequential blast radius here: quantified on the real 1号
+    # generation, 4,394 of 6,373 native aggregation items (69%) never
+    # got a .todo at all, and 2,343 of those have zero pmtiles-store
+    # output -- meaning aggregation_run_national's own "1,979/1,979 done"
+    # (D48) was 100% of an undercounted denominator, not 100% of the
+    # true national total.
+    #
+    # aggregation_run.py's own run() already checks `.done` before doing
+    # any real work (os.path.isfile(f'{filepath}.done')), so writing a
+    # .todo for every item -- including ones that already have a .done
+    # from a genuinely-completed earlier pass -- costs nothing beyond a
+    # fast no-op skip. That existing check is the real, correct
+    # idempotency guard; this function's own dirty-filtering was a
+    # redundant, and here actively harmful, second gate.
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
 
-    dirty_filepaths = None
-    if len(aggregation_ids) < 2:
-        dirty_filepaths = sorted(glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv'))
-    else:
-        last_aggregation_id = aggregation_ids[-2]
-        dirty_filepaths = [f'aggregation-store/{aggregation_id}/{filename}' for filename in utils.get_dirty_aggregation_filenames(aggregation_id, last_aggregation_id)]
-    
-    for dirty_filepath in dirty_filepaths:
-        with open(f'{dirty_filepath}.todo', 'w') as f:
+    filepaths = sorted(glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv'))
+    for filepath in filepaths:
+        with open(f'{filepath}.todo', 'w') as f:
             f.write('')
 
 def main():
