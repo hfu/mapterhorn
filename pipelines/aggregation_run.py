@@ -18,8 +18,16 @@ def get_worker_count():
                 return value
         except ValueError:
             pass
-    # Default: 4 workers (half of typical 8-core hardware, avoids saturating CPU/disk)
-    return 4
+    # Default: 5 workers. Raised from 4 (mapterhorn-japan-bridge DECISIONS.md
+    # D84, 2026-09-01) -- the original 4 assumed aggregation_run.py sharing
+    # the machine with a concurrent downsampling_run.py pass and a single
+    # pmtiles-store disk; neither holds today (pmtiles-store is now split
+    # across two disks since D58/D61, and aggregation_repair_3344 runs
+    # alone). CPU measured ~46-47% idle at 4 workers (10 logical cores,
+    # 4P+6E), so raising this by one worker at a time and measuring the
+    # actual items/15min pace, rather than jumping straight to a number
+    # that assumes full utilization is safe.
+    return 5
 
 def run(filepath):
     filename = filepath.split('/')[-1]
