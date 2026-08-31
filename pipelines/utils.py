@@ -83,7 +83,7 @@ def save_terrarium_tile(data, filepath, valid_mask=None):
 
     data += 32768
     rgba = np.zeros((512, 512, 4), dtype=np.uint8)
-    np.seterr(all='raise')
+    np.seterr(all='raise', under='ignore')
     try:
         rgba[..., 0] = data // 256
         rgba[..., 1] = data % 256
