@@ -42,8 +42,9 @@ def audit(aggregation_id):
         z, x, y, parent_zoom = [int(a) for a in base.split('-')]
         # z (the extent's own zoom), not parent_zoom -- matches
         # downsampling_run.py's own main() -> get_pmtiles_folder(extent_x,
-        # extent_y, extent_z) call.
-        folder = utils.get_pmtiles_folder(x, y, z)
+        # extent_y, extent_z, layer='downsampling') call. This audits
+        # downsampling_run.py's own output, always that layer (D95/D107).
+        folder = utils.get_pmtiles_folder(x, y, z, layer='downsampling')
         filepath = f'{folder}/{base}.pmtiles'
         if os.path.isfile(filepath):
             healthy += 1

@@ -35,14 +35,21 @@ def check_readiness(filepath):
     if utils.os.path.isfile(filepath.replace('-downsampling.csv', '-downsampling.done')):
         return True, True, None, 0
 
+    # aggregation-store/{aggregation_id}/{filename} -- same split pattern
+    # downsampling_run.py's own main() uses to recover aggregation_id.
+    aggregation_id = filepath.split('/')[1]
+
     with open(filepath) as f:
         pmtiles_filenames = [a.strip() for a in f.readlines()[1:]]
 
     missing = 0
     for pmtiles_filename in pmtiles_filenames:
-        file_z, file_x, file_y, _ = [int(a) for a in
+        file_z, file_x, file_y, file_child_z = [int(a) for a in
                                       pmtiles_filename.replace('.pmtiles', '').split('-')]
-        pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
+        # D95/D107: a referenced child may be either layer -- resolve
+        # per-reference (mirrors downsampling_run.py's own check).
+        file_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
+        pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer)
         if not utils.os.path.isfile(f'{pmtiles_folder}/{pmtiles_filename}'):
             missing += 1
 

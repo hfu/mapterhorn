@@ -279,8 +279,13 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
                 continue
             child_bytes = None
             filename = tile_to_pmtiles_filename[child]
-            file_z, file_x, file_y, _ = [int(a) for a in filename.replace('.pmtiles', '').split('-')]
-            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
+            file_z, file_x, file_y, file_child_z = [int(a) for a in filename.replace('.pmtiles', '').split('-')]
+            # D95/D107: this child may be a native aggregation leaf OR a
+            # downsampling-pyramid intermediate from a finer zoom -- the
+            # filename alone can't tell (see utils.resolve_layer()'s own
+            # docstring), so resolve it per-reference rather than assume.
+            child_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
+            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=child_layer)
             filepath = f'{pmtiles_folder}/{filename}'
 
             # filename came from this item's own downsampling.csv, written once by
@@ -396,7 +401,9 @@ def main(filepaths):
             parts = filename.split('-')
             extent_z, extent_x, extent_y, parent_zoom = [int(a) for a in parts[:4]]
 
-            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z)
+            # This item's own output is always a downsampling-layer file --
+            # downsampling_run.py never writes aggregation-layer leaves.
+            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z, layer='downsampling')
             utils.create_folder(out_folder)
             out_filepath = f'{out_folder}/{extent_z}-{extent_x}-{extent_y}-{parent_zoom}.pmtiles'
 
@@ -414,8 +421,9 @@ def main(filepaths):
             # Check if referenced files exist
             missing_files = []
             for pmtiles_filename in pmtiles_filenames:
-                file_z, file_x, file_y, _ = [int(a) for a in pmtiles_filename.replace('.pmtiles', '').split('-')]
-                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z)
+                file_z, file_x, file_y, file_child_z = [int(a) for a in pmtiles_filename.replace('.pmtiles', '').split('-')]
+                file_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
+                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer)
                 filepath_check = f'{pmtiles_folder}/{pmtiles_filename}'
                 if not os.path.isfile(filepath_check):
                     missing_files.append(pmtiles_filename)

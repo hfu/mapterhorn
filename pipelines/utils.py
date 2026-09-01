@@ -221,14 +221,48 @@ def get_dirty_aggregation_filenames(current_aggregation_id, last_aggregation_id)
             dirty_filenames.append(filename)
     return dirty_filenames
 
-def get_pmtiles_folder(x, y, z):
+LAYERS = ('aggregation', 'downsampling')
+DATATYPES = ('elevation', 'lineage')
+
+def get_pmtiles_folder(x, y, z, layer, datatype='elevation'):
+    """mapterhorn-japan-bridge DECISIONS.md D95/D107: pmtiles-store is
+    split by `layer` (aggregation leaf output vs. downsampling pyramid
+    output) and by `datatype` (elevation vs. lineage) so that no single
+    filename pattern is shared between things that get created,
+    renamed, or deleted independently -- the root cause of D74-D76's
+    3,344-item aggregation loss. Every caller must know which layer/
+    datatype it is locating; when it doesn't (downsampling_run.py
+    resolving a *child* reference, which may itself be either layer),
+    use resolve_layer() first rather than guessing.
+    """
+    assert layer in LAYERS, f'unknown layer {layer!r}'
+    assert datatype in DATATYPES, f'unknown datatype {datatype!r}'
+    prefix = f'pmtiles-store/{layer}/{datatype}'
     if z < 7:
-        return 'pmtiles-store'
+        return prefix
     if z == 7:
-        return f'pmtiles-store/{z}-{x}-{y}'
+        return f'{prefix}/{z}-{x}-{y}'
     else:
         parent = mercantile.parent(mercantile.Tile(x=x, y=y, z=z), zoom=7)
-        return f'pmtiles-store/{parent.z}-{parent.x}-{parent.y}'
+        return f'{prefix}/{parent.z}-{parent.x}-{parent.y}'
+
+def resolve_layer(aggregation_id, z, x, y, child_z):
+    """Which layer produced (or should produce) the pmtiles-store file
+    named `{z}-{x}-{y}-{child_z}.pmtiles`? downsampling_covering.py's
+    write_downsampling_items() writes downsampling.csv coverings whose
+    own {z}-{x}-{y}-{child_z} fields can coincide with a *native*
+    aggregation.csv covering at the same quadruple (the pyramid is
+    recursive: a downsampling item at zoom Z can itself be listed as a
+    "child" of a downsampling item at zoom Z-1) -- so a referenced
+    child filename alone never tells you which layer wrote it. The
+    matching covering CSV does: aggregation_covering.py writes exactly
+    one *-aggregation.csv per native leaf position; if one exists for
+    this exact quadruple, this position is a leaf (aggregation layer),
+    otherwise it was produced by downsampling_run.py consuming a
+    *-downsampling.csv at this same quadruple (downsampling layer).
+    """
+    agg_csv = f'aggregation-store/{aggregation_id}/{z}-{x}-{y}-{child_z}-aggregation.csv'
+    return 'aggregation' if os.path.isfile(agg_csv) else 'downsampling'
 
 # GSI's own DEM naming embeds a product-type letter after the resolution
 # digits (e.g. ...-DEM5A-, ...-DEM10B-): A = airborne laser (LiDAR,

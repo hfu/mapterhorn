@@ -26,8 +26,18 @@ tempfile.tempdir = None  # drop any cached resolution from before this line ran
 
 import utils
 
-def get_parent_to_filepaths(only_dirty, num_aggregations):
-    filepaths = sorted(glob('pmtiles-store/*.pmtiles') + glob('pmtiles-store/*/*.pmtiles'))
+def get_parent_to_filepaths(only_dirty, num_aggregations, datatype='elevation'):
+    # D95/D107: pmtiles-store is split by layer (aggregation/downsampling)
+    # and datatype (elevation/lineage) -- bundle.py's job is to combine
+    # BOTH layers of one datatype into the final archive, so glob each
+    # layer's root separately rather than assuming a single shared tree
+    # the way the pre-D107 flat pmtiles-store/ did.
+    filepaths = sorted(
+        glob(f'pmtiles-store/aggregation/{datatype}/*.pmtiles') +
+        glob(f'pmtiles-store/aggregation/{datatype}/*/*.pmtiles') +
+        glob(f'pmtiles-store/downsampling/{datatype}/*.pmtiles') +
+        glob(f'pmtiles-store/downsampling/{datatype}/*/*.pmtiles')
+    )
 
     parent_to_filepath = {}
     dirty_parents = get_dirty_parents(num_aggregations)

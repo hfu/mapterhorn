@@ -97,14 +97,14 @@ def main(filepath, tmp_folder):
     tiff_filepath = f'{tmp_folder}/merged-3857.tiff'
 
     aggregation_tile = mercantile.Tile(x=x, y=y, z=z)
-    out_folder = utils.get_pmtiles_folder(x, y, z)
+    out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation')
     utils.create_folder(out_folder)
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
     # Remove stale prior-generation output at this exact macrotile position (same
-    # z-x-y, different child_z) so bundle.py's unconditional
-    # glob('pmtiles-store/*.pmtiles' + '*/*.pmtiles') never mixes an old run's
-    # now-superseded archive in alongside this run's current one -- pmtiles-store
-    # is otherwise never cleaned between runs (DECISIONS.md D12's open question).
+    # z-x-y, different child_z) so bundle.py's own glob of the aggregation layer
+    # never mixes an old run's now-superseded archive in alongside this run's
+    # current one -- pmtiles-store is otherwise never cleaned between runs
+    # (DECISIONS.md D12's open question).
     # get_pmtiles_folder() buckets by z7 parent, so out_folder can hold many
     # unrelated macrotiles' files; the z-x-y-prefixed glob (not out_folder-wide)
     # keeps this scoped to just this position's own prior generations.
