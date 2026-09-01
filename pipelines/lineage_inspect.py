@@ -2,21 +2,18 @@
 supplied each pixel of one aggregation tile's merged output.
 
 Deliberately NOT wired into the production pipeline (aggregation_run.py
-never imports this) -- it's a standalone diagnostic, run by hand against
-one aggregation item at a time, using its own isolated tmp directory so
-it can never collide with a real run's tmp-store/{aggregation_id}/{item}
-state. This mirrors hfu/fusi's own pipelines/lineage.py, which was also
-a standalone single-tile generator distinct from that project's
-always-on `--emit-lineage` production flag -- this tool intentionally
-stops at the lighter-weight half of that pattern (see DECISIONS.md D20):
-no companion "-lineage" PMTiles archive, no per-run I/O cost added to
-real production, no changes to aggregation_reproject.py/
-aggregation_merge.py/aggregation_tile.py/aggregation_run.py at all.
-Reuses aggregation_reproject.reproject() as-is (don't reimplement
-warping) and re-derives the provenance mask with the same nodata-fill
-loop aggregation_merge.merge() already uses for the real elevation
-composite, just tracking *which group* filled each pixel instead of
-*what value*.
+never imports *this file*) -- it's a standalone diagnostic, run by hand
+against one aggregation item at a time, using its own isolated tmp
+directory so it can never collide with a real run's tmp-store/
+{aggregation_id}/{item} state. **Update, D107**: production now has its
+own lineage PMTiles archive after all (EMIT_LINEAGE in aggregation_run.py,
+D93/D94/D96/D107) -- but it reuses this file's own provenance-computation
+core via the shared `lineage_provenance` module rather than this script
+itself, so this tool's own standalone/isolated nature is unchanged; it's
+still never imported by the production path, just no longer the only
+place this logic lives. Reuses aggregation_reproject.reproject() as-is
+(don't reimplement warping) and lineage_provenance.compute_provenance()
+for the actual per-pixel provenance walk.
 
 Usage:
   python3 lineage_inspect.py <aggregation-csv> [--out lineage.png]
@@ -28,14 +25,14 @@ aggregation-store/{aggregation_id}/{z}-{x}-{y}-{child_z}-aggregation.csv
 import argparse
 import shutil
 import tempfile
-from glob import glob
 
 import numpy as np
-import rasterio
 from PIL import Image
 
 import aggregation_reproject
 import utils
+
+from lineage_provenance import GLOBAL_TIER, compute_provenance, global_tier_of
 
 # Fixed palette: index 0..6 for the seven priority tiers (1, 5a, 5b, 5c,
 # 10a, 10b, sea), -1 for nodata (no source covered this pixel at all).
@@ -64,30 +61,6 @@ PALETTE = {
     6: (150, 150, 150),   # sea (GLO-30) -> grey
 }
 
-# (source, product-type rank) -> global tier index, matching this
-# project's own seven-tier priority order (DECISIONS.md D20): 1, 5a, 5b,
-# 5c, 10a, 10b, sea. jpnationalsea has no product-type letter, so its
-# rank is always utils.PRODUCT_TYPE_RANK's fallback, 0.
-GLOBAL_TIER = {
-    ('jpnational1', 0): 0,
-    ('jpnational5', 0): 1,
-    ('jpnational5', 1): 2,
-    ('jpnational5', 2): 3,
-    ('jpnational10', 0): 4,
-    ('jpnational10', 1): 5,
-    ('jpnationalsea', 0): 6,
-}
-
-
-def group_product_type_rank(group):
-    return utils.get_product_type_rank(group[0]['filename'])
-
-
-def global_tier_of(group):
-    source = group[0]['source']
-    rank = group_product_type_rank(group)
-    return GLOBAL_TIER.get((source, rank))
-
 
 def group_label(group):
     """Human-readable tier label for a get_grouped_source_items() group,
@@ -95,31 +68,6 @@ def group_label(group):
     source = group[0]['source']
     m = utils.PRODUCT_TYPE_PATTERN.search(group[0]['filename'])
     return f'{source}/{m.group(1)}' if m else source
-
-
-def compute_provenance(filepath, tmp_folder):
-    """Re-derive which group filled each pixel, using the same nodata-fill
-    walk aggregation_merge.merge() uses for the real elevation composite --
-    just tracking group index instead of elevation value."""
-    num_tiff_files = len(glob(f'{tmp_folder}/*-3857.tiff'))
-    if num_tiff_files == 0:
-        raise ValueError(f'no reprojected tiffs found for {filepath}')
-
-    tiff_filepaths = [f'{tmp_folder}/{i}-3857.tiff' for i in range(num_tiff_files)]
-
-    with rasterio.open(tiff_filepaths[0]) as src:
-        merged = np.nan_to_num(src.read(1), nan=-9999)
-        provenance = np.where(merged != -9999, 0, -1).astype('int16')
-
-    for i, tiff_filepath in enumerate(tiff_filepaths[1:], start=1):
-        with rasterio.open(tiff_filepath) as src:
-            current = np.nan_to_num(src.read(1), nan=-9999)
-        fill_mask = (provenance == -1) & (current != -9999)
-        provenance[fill_mask] = i
-        if -1 not in provenance:
-            break
-
-    return provenance, num_tiff_files
 
 
 def provenance_to_rgb(provenance, groups):

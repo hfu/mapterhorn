@@ -1,4 +1,5 @@
 from glob import glob
+import json
 import random
 import shutil
 import os
@@ -7,7 +8,16 @@ from multiprocessing import Pool
 import aggregation_reproject
 import aggregation_merge
 import aggregation_tile
+import lineage_provenance
+import lineage_tile
 import utils
+
+# D93/D94/D96/D107: opt-in production lineage tile emission, off by default
+# (D93's own recommendation -- 1号 never used this; 1.5号 is the first
+# generation to). When set, run() computes a lineage/provenance raster
+# alongside the elevation composite and writes it as its own PMTiles
+# archive (datatype='lineage', separate from the elevation datatype).
+EMIT_LINEAGE = os.environ.get('EMIT_LINEAGE', '0') == '1'
 
 def get_worker_count():
     """Get worker count with graceful defaults (mirrors downsampling_run.py)"""
@@ -29,6 +39,26 @@ def get_worker_count():
     # that assumes full utilization is safe.
     return 5
 
+def emit_lineage(filepath, tmp_folder):
+    """D93/D94/D96/D107: compute and tile the provenance raster. Must run
+    between reproject() and merge() -- merge() consumes and deletes the
+    per-group `{i}-3857.tiff` files compute_provenance() needs (or, in the
+    single-source case, renames the only one away entirely), so there is
+    no reprojected data left to read from once merge() has returned. This
+    is exactly why lineage_inspect.py's own standalone diagnostic never
+    calls merge() at all -- reused here, not rediscovered."""
+    filename = filepath.split('/')[-1]
+    z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
+
+    groups = utils.get_grouped_source_items(filepath)
+    provenance, _num_groups_used = lineage_provenance.compute_provenance(filepath, tmp_folder)
+    category_data = lineage_provenance.local_provenance_to_global(provenance, groups)
+
+    with open(f'{tmp_folder}/reprojection.json') as f:
+        buffer_pixels = json.load(f)['buffer_pixels']
+
+    lineage_tile.main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder)
+
 def run(filepath):
     filename = filepath.split('/')[-1]
     item = filename.replace('-aggregation.csv', '')
@@ -45,6 +75,8 @@ def run(filepath):
     tmp_folder = f'tmp-store/{aggregation_id}/{item}'
     os.makedirs(tmp_folder, exist_ok=True)
     aggregation_reproject.reproject(filepath, tmp_folder)
+    if EMIT_LINEAGE:
+        emit_lineage(filepath, tmp_folder)
     aggregation_merge.merge(filepath, tmp_folder)
     aggregation_tile.main(filepath, tmp_folder)
     shutil.rmtree(tmp_folder)

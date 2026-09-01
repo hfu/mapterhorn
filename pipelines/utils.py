@@ -123,6 +123,25 @@ def save_rgb_tile(rgb_data, filepath, mask_data=None):
         if encoded:
             f.write(encoded)
 
+def save_lineage_tile(category_data, filepath, valid_mask=None):
+    """Save a categorical lineage/provenance tile as lossless WebP (D93/D94/
+    D107): category index (0..6, lineage_provenance.GLOBAL_TIER) goes in the
+    R channel, validity in alpha -- lossless() and losslessly round-trippable
+    is mandatory here (unlike save_rgb_tile's lossy imagery path): a single
+    off-by-one from lossy compression would silently relabel which source
+    tier a pixel came from. G/B are unused (kept zero) -- one channel is
+    enough for <=7 category values, no need for save_terrarium_tile's 3-byte
+    fixed-point elevation encoding. Consumers (downsampling_run.py's lineage
+    branch, lineage_downsample.majority_vote_downsample()) read the R channel
+    back as `values` and the alpha channel back as `alpha`, matching that
+    function's own (1024, 1024) values/alpha argument convention."""
+    data = np.clip(np.nan_to_num(category_data, nan=0), 0, 255).astype(np.uint8)
+    rgba = np.zeros((*data.shape, 4), dtype=np.uint8)
+    rgba[..., 0] = data
+    rgba[..., 3] = 255 if valid_mask is None else np.where(valid_mask, 255, 0).astype(np.uint8)
+    with open(filepath, 'wb') as f:
+        f.write(imagecodecs.webp_encode(rgba, lossless=True))
+
 def create_archive(tmp_folder, out_filepath):
     # Write to a same-directory temp path and os.replace() into place at the very
     # end, rather than writing out_filepath directly -- this function streams tiles
