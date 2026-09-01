@@ -26,6 +26,13 @@ tempfile.tempdir = None  # drop any cached resolution from before this line ran
 
 import utils
 
+# D93/D96/D107: 'elevation' (default, 1号's only mode) or 'lineage' -- which
+# pmtiles-store datatype tree to bundle. A single bundle.py invocation
+# handles exactly one; building both means running this script twice
+# (mirrors aggregation_run.py's EMIT_LINEAGE / downsampling_run.py's
+# DOWNSAMPLING_DATATYPE, same env-var convention).
+BUNDLE_DATATYPE = os.environ.get('BUNDLE_DATATYPE', 'elevation')
+
 def get_parent_to_filepaths(only_dirty, num_aggregations, datatype='elevation'):
     # D95/D107: pmtiles-store is split by layer (aggregation/downsampling)
     # and datatype (elevation/lineage) -- bundle.py's job is to combine
@@ -232,6 +239,11 @@ def get_name_from_parent(parent):
         name = 'planet'
     else:
         name = f'{parent.z}-{parent.x}-{parent.y}'
+    # D107: keep the two datatypes' bundle-store output filenames distinct
+    # so a lineage run's files never collide with (or get globbed alongside)
+    # an elevation run's -- same directory, different names.
+    if BUNDLE_DATATYPE == 'lineage':
+        name = f'{name}-lineage'
     return name
 
 def get_worker_count():
@@ -262,7 +274,8 @@ def main():
         exit()
 
     dirty_only = False  # Bundling all files (not just dirty) to include new downsampling tiles
-    parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations)
+    print(f'datatype: {BUNDLE_DATATYPE} (set BUNDLE_DATATYPE to override)')
+    parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations, datatype=BUNDLE_DATATYPE)
 
     # bundle_one() has no internal parallelism -- one region is one atomic,
     # single-threaded task (create_archive()'s writer needs tile-id-sorted

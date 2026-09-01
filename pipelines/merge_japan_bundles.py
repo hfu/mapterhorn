@@ -26,8 +26,38 @@ os.makedirs(os.environ['TMPDIR'], exist_ok=True)
 import tempfile
 tempfile.tempdir = None  # drop any cached resolution from before this line ran
 
-OUTPUT = 'bundle-store/mapterhorn-japan-bridge.pmtiles'  # japan.pmtiles before mapterhorn-japan-bridge DECISIONS.md D46
-INPUTS = sorted(p for p in glob('bundle-store/*.pmtiles') if os.path.abspath(p) != os.path.abspath(OUTPUT))
+# D93/D96/D107/D109: 'elevation' (default, 1号's only mode) or 'lineage'.
+# japan.pmtiles before mapterhorn-japan-bridge DECISIONS.md D46.
+#
+# Naming (D109 refactor -- resolves the D103 ENOSPC incident's root cause,
+# an ambiguous pair of files where the with-overview/without-overview
+# distinction lived only in which one someone remembered to delete):
+#   elevation: this step's own output is an INTERMEDIATE, never published
+#   directly -- pmtiles_merge.py still needs to splice in Mapterhorn's
+#   global z0-7 overview before it's publishable. ".z8plus" makes that
+#   explicit (echoes the pre-D46 "japan-z8plus.pmtiles" name). Only the
+#   final, overview-spliced archive is ever named plain
+#   "mapterhorn-japan-bridge.pmtiles" -- that name now refers to exactly
+#   one thing, never two candidates someone has to pick between.
+#   lineage: no global-overview splice applies (Mapterhorn's own global
+#   product has no provenance/lineage data to splice in -- lineage is
+#   Japan-only end to end), so this step's own output IS the final,
+#   publishable lineage archive already.
+MERGE_DATATYPE = os.environ.get('MERGE_DATATYPE', 'elevation')
+if MERGE_DATATYPE == 'lineage':
+    OUTPUT = 'bundle-store/mapterhorn-japan-bridge-lineage.pmtiles'
+else:
+    OUTPUT = 'bundle-store/mapterhorn-japan-bridge.z8plus.pmtiles'
+# Datatype-scoped: bundle-store holds both datatypes' regional archives
+# side by side (distinguished by BUNDLE_DATATYPE's own "-lineage" filename
+# suffix, D107) -- a naive glob would merge them together into one corrupt
+# archive, so include only this datatype's own files.
+_is_lineage_file = lambda p: p.endswith('-lineage.pmtiles')
+INPUTS = sorted(
+    p for p in glob('bundle-store/*.pmtiles')
+    if os.path.abspath(p) != os.path.abspath(OUTPUT)
+    and _is_lineage_file(p) == (MERGE_DATATYPE == 'lineage')
+)
 
 
 def FileSource(f):
