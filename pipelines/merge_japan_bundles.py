@@ -13,6 +13,18 @@ from pmtiles.reader import Reader, all_tiles
 from pmtiles.tile import TileType, Compression, zxy_to_tileid
 from pmtiles.writer import Writer
 
+# D104 (mapterhorn-japan-bridge DECISIONS.md): the pmtiles library's Writer
+# buffers tile bytes via tempfile.TemporaryFile() with no path argument, so
+# it silently lands on the OS default temp dir (TMPDIR, usually the boot
+# volume) instead of the output volume -- on a machine where the real data
+# lives on a much larger external volume than the boot disk, concurrent
+# workers can exhaust the boot disk's small headroom long before the
+# output volume fills up, surfacing as a confusing ENOSPC unrelated to the
+# volume actually holding the data. setdefault() so an explicit TMPDIR
+# (e.g. set by the caller for a different layout) still wins.
+os.environ.setdefault('TMPDIR', os.path.abspath('pmtiles-store/tmp-store/writer-scratch/'))
+os.makedirs(os.environ['TMPDIR'], exist_ok=True)
+
 OUTPUT = 'bundle-store/mapterhorn-japan-bridge.pmtiles'  # japan.pmtiles before mapterhorn-japan-bridge DECISIONS.md D46
 INPUTS = sorted(p for p in glob('bundle-store/*.pmtiles') if os.path.abspath(p) != os.path.abspath(OUTPUT))
 
