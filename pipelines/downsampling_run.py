@@ -14,6 +14,7 @@ import imagecodecs
 import mercantile
 from pmtiles.reader import Reader, MmapSource
 
+import lineage_downsample
 import utils
 
 # See aggregation_tile.py for the full explanation. Overview/parent tiles
@@ -23,6 +24,16 @@ import utils
 # same whole-meter-quantization-becomes-a-cliff problem reappears one layer
 # up the pyramid.
 TILE_ENCODING = os.environ.get('TILE_ENCODING', 'terrarium')
+
+# D93/D94/D96/D107: 'elevation' (default, 1号's only mode) uses the
+# alpha-weighted-average reduction below. 'lineage' switches create_tile()
+# to lineage_downsample.majority_vote_downsample() instead -- averaging
+# category indices is meaningless (see that module's own docstring). A
+# single downsampling_run.py invocation processes exactly one datatype;
+# building both pyramids means running this script twice (mirrors
+# aggregation_run.py's EMIT_LINEAGE producing two sibling leaf archives
+# that then each need their own downsampling pass).
+DOWNSAMPLING_DATATYPE = os.environ.get('DOWNSAMPLING_DATATYPE', 'elevation')
 
 # Geographic center for prioritization (default: Freetown, Sierra Leone)
 # Override with environment variables: CENTER_LAT, CENTER_LON
@@ -285,7 +296,7 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             # filename alone can't tell (see utils.resolve_layer()'s own
             # docstring), so resolve it per-reference rather than assume.
             child_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
-            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=child_layer)
+            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=child_layer, datatype=DOWNSAMPLING_DATATYPE)
             filepath = f'{pmtiles_folder}/{filename}'
 
             # filename came from this item's own downsampling.csv, written once by
@@ -318,7 +329,25 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
                 full_data[row_start:row_end, col_start:col_end] = child_img
                 tiles_found += 1
 
-    if TILE_ENCODING == 'terrarium':
+    if DOWNSAMPLING_DATATYPE == 'lineage':
+        # D93/D94/D96/D107: category data, not a continuous quantity --
+        # averaging tier indices is meaningless (lineage_downsample.py's
+        # own docstring). full_data's R channel already holds each child's
+        # category index (0..6) and A channel its validity, matching
+        # utils.save_lineage_tile()'s own encoding -- majority_vote_
+        # downsample() wants those as two separate (1024,1024) arrays.
+        values = full_data[..., 0].astype(np.int64)
+        alpha = full_data[..., 3]
+        parent_values, parent_alpha = lineage_downsample.majority_vote_downsample(values, alpha)
+        parent_category = np.where(
+            parent_values == lineage_downsample.NODATA, 255, parent_values
+        ).astype(np.uint8)
+        parent_valid_mask = parent_alpha > 0
+        parent_rgba = np.zeros((512, 512, 4), dtype=np.uint8)
+        parent_rgba[..., 0] = parent_category
+        parent_rgba[..., 3] = np.where(parent_valid_mask, 255, 0).astype(np.uint8)
+        parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=True)
+    elif TILE_ENCODING == 'terrarium':
         # Matches upstream mapterhorn/mapterhorn's own downsampling exactly
         # (decode each child to real elevation, average the elevations, then
         # re-derive R/G/B from that single averaged number via floor
@@ -403,7 +432,7 @@ def main(filepaths):
 
             # This item's own output is always a downsampling-layer file --
             # downsampling_run.py never writes aggregation-layer leaves.
-            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z, layer='downsampling')
+            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z, layer='downsampling', datatype=DOWNSAMPLING_DATATYPE)
             utils.create_folder(out_folder)
             out_filepath = f'{out_folder}/{extent_z}-{extent_x}-{extent_y}-{parent_zoom}.pmtiles'
 
@@ -423,7 +452,7 @@ def main(filepaths):
             for pmtiles_filename in pmtiles_filenames:
                 file_z, file_x, file_y, file_child_z = [int(a) for a in pmtiles_filename.replace('.pmtiles', '').split('-')]
                 file_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
-                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer)
+                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer, datatype=DOWNSAMPLING_DATATYPE)
                 filepath_check = f'{pmtiles_folder}/{pmtiles_filename}'
                 if not os.path.isfile(filepath_check):
                     missing_files.append(pmtiles_filename)
