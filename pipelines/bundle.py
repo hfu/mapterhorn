@@ -11,17 +11,18 @@ from pmtiles.tile import zxy_to_tileid, TileType, Compression
 from pmtiles.reader import Reader, MmapSource, all_tiles
 from pmtiles.writer import Writer
 
-# D104 (mapterhorn-japan-bridge DECISIONS.md): the pmtiles library's Writer
-# buffers tile bytes via tempfile.TemporaryFile() with no path argument, so
-# it silently lands on the OS default temp dir (TMPDIR, usually the boot
-# volume) instead of the output volume -- on a machine where the real data
-# lives on a much larger external volume than the boot disk, concurrent
-# workers can exhaust the boot disk's small headroom long before the
-# output volume fills up, surfacing as a confusing ENOSPC unrelated to the
-# volume actually holding the data. setdefault() so an explicit TMPDIR
-# (e.g. set by the caller for a different layout) still wins.
-os.environ.setdefault('TMPDIR', os.path.abspath('pmtiles-store/tmp-store/writer-scratch/'))
+# D104/D105 (mapterhorn-japan-bridge DECISIONS.md): the pmtiles library's
+# Writer buffers tile bytes via tempfile.TemporaryFile() with no path
+# argument, so it lands on tempfile.gettempdir() -- which honors TMPDIR,
+# but macOS login/SSH sessions already export TMPDIR (pointing at the
+# per-user /var/folders/.../T/ directory on the small boot volume) before
+# this script ever runs, so os.environ.setdefault('TMPDIR', ...) (D104's
+# first attempt) was always a no-op: the key is never actually absent.
+# Force-override unconditionally instead.
+os.environ['TMPDIR'] = os.path.abspath('pmtiles-store/tmp-store/writer-scratch/')
 os.makedirs(os.environ['TMPDIR'], exist_ok=True)
+import tempfile
+tempfile.tempdir = None  # drop any cached resolution from before this line ran
 
 import utils
 
