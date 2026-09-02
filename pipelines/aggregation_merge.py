@@ -8,6 +8,7 @@ import numpy as np
 from scipy import ndimage
 
 import utils
+from aggregation_reproject import contains_nodata_pixels
 
 
 def merge(filepath, tmp_folder):
@@ -49,7 +50,49 @@ def merge(filepath, tmp_folder):
         raise ValueError(f'failed to read tifs of {filepath}')
 
     if num_tiff_files == 1:
-        os.rename(f'{tmp_folder}/0-3857.tiff', output_path)
+        # D113: this used to be a bare os.rename in every case -- a
+        # single-source-group item (e.g. only Copernicus reaches this area,
+        # no higher-priority 1m/5m/10m group has ANY coverage here) skipped
+        # every zero-fill path entirely, so that group's own internal -9999
+        # (its native nodata, or gaps within its own coverage extent) rode
+        # straight through to the published archive unmodified. Keep the
+        # cheap rename when the raster is verifiably clean (the common case,
+        # so the national build does not pay a blanket read/re-encode cost);
+        # otherwise re-encode windowed with -9999 -> 0. No overlap/blend is
+        # needed here since there is nothing else to blend against.
+        src_path = f'{tmp_folder}/0-3857.tiff'
+        if not contains_nodata_pixels(src_path):
+            os.rename(src_path, output_path)
+        else:
+            single_tile_size = 512
+            with rasterio.env.Env(GDAL_CACHEMAX=256):
+                with rasterio.open(src_path) as src:
+                    height = src.height
+                    width = src.width
+                    profile = src.profile
+                    profile.update(
+                        tiled=True,
+                        blockxsize=512,
+                        blockysize=512,
+                        compress='ZSTD',
+                        zstd_level=1,
+                    )
+                    with rasterio.open(output_path, 'w', **profile) as dst:
+                        for y in range(0, height, single_tile_size):
+                            for x in range(0, width, single_tile_size):
+                                window = rasterio.windows.Window(
+                                    x, y,
+                                    min(single_tile_size, width - x),
+                                    min(single_tile_size, height - y),
+                                )
+                                block = np.nan_to_num(src.read(1, window=window), nan=-9999)
+                                block[block == -9999] = 0
+                                dst_dtype = dst.dtypes[0]
+                                if block.dtype != np.dtype(dst_dtype):
+                                    with np.errstate(under='ignore'):
+                                        block = block.astype(dst_dtype, copy=False)
+                                dst.write(block, 1, window=window)
+            os.remove(src_path)
         command = f'touch {done_filepath}'
         utils.run_command(command)
         return
@@ -114,19 +157,60 @@ def merge(filepath, tmp_folder):
                                 eroded = ndimage.binary_erosion(binary_mask)
                                 boundary_tile |= binary_mask.astype(bool) & ~eroded
                         
+                            # Zero the 1px window frame: binary_erosion runs
+                            # with border_value=0, so every window-edge pixel
+                            # of a fully-valid region reads as "boundary"
+                            # even deep inside clean data; blurring those
+                            # would smear real terrain along every 512px
+                            # processing-block seam. This exists for that
+                            # border artifact only -- it is NOT the cause of
+                            # the D114(B) coastline bug and must stay.
                             boundary_tile[0, :] = 0
                             boundary_tile[-1, :] = 0
                             boundary_tile[:, 0] = 0
                             boundary_tile[:, -1] = 0
 
-                            binary_mask = (merged_tile != -9999).astype('int32')
-                            eroded = ndimage.binary_erosion(binary_mask)
-                            boundary_tile &= eroded.astype(bool)
-                            
-                            if 1 in boundary_tile:
-                                merged_tile[merged_tile == -9999] = 0
-                                truncate = 4
-                                sigma = max(int(overlap / truncate) - 1, 1)
+                            # D114(B) fix: this used to re-derive the mask
+                            # from the FINAL merged state and AND its erosion
+                            # into boundary_tile:
+                            #     binary_mask = (merged_tile != -9999).astype('int32')
+                            #     eroded = ndimage.binary_erosion(binary_mask)
+                            #     boundary_tile &= eroded.astype(bool)
+                            # The erosion of the final mask is False on every
+                            # pixel adjacent to a still-invalid pixel, so the
+                            # AND deleted exactly the transition rings facing
+                            # permanently-unfilled regions -- real coastlines
+                            # where no source ever fills the seaward side --
+                            # which is precisely the case the blur below
+                            # exists to smooth (the hard land->0 step
+                            # otherwise ships as a cliff). The boundary_tile
+                            # accumulated incrementally above, as each
+                            # group's fill actually happened, is already
+                            # correct; recomputing from the final state was
+                            # the lossy step. Deleted, not rewritten.
+
+                            # Fill unconditionally. This used to hide inside
+                            # the blur gate below, so any block whose
+                            # boundary_tile came out empty (no valid pixels
+                            # at all, or a boundary fully destroyed by the
+                            # deleted AND above) kept raw -9999 in the
+                            # merged output.
+                            merged_tile[merged_tile == -9999] = 0
+
+                            truncate = 4
+                            sigma = max(int(overlap / truncate) - 1, 1)
+                            # Guard: the blur kernel reaches truncate*sigma
+                            # pixels; if that exceeds the overlap the read
+                            # window loaded, the blur would use truncated
+                            # context and neighbouring blocks could disagree
+                            # in their shared region. Only reachable for
+                            # buffer_pixels <= 4 (item maxzoom <= 11), which
+                            # terrarium builds never produce since
+                            # aggregation_covering.py floors maxzoom at
+                            # macrotile_z = 12 (buffer_pixels 7 at z12).
+                            blur_fits_in_overlap = truncate * sigma < overlap
+
+                            if boundary_tile.any() and blur_fits_in_overlap:
                                 boundary_tile_blurred = ndimage.gaussian_filter(boundary_tile.astype(float), sigma=sigma, truncate=truncate)
                                 boundary_tile_blurred /= (1.0 / (np.sqrt(2 * np.pi) * sigma))
                                 boundary_tile_blurred = np.clip(boundary_tile_blurred, 0, 1)
