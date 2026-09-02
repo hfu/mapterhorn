@@ -47,6 +47,35 @@ def run(cmd, extra_env=None):
 
 
 def main():
+    # D115 SAFETY GUARD (2026-09-03): this script is stale and dangerous
+    # against the current pmtiles-store layout. bundle.py was refactored
+    # (D95/D107) to read only pmtiles-store/{aggregation,downsampling}/
+    # {datatype}/... (the new 1.5-go layered tree), which is currently
+    # EMPTY -- 1-go production data (14,590 files, ~579GB as of tonight)
+    # is still entirely in the old flat pmtiles-store/{z7bucket}/ layout.
+    # Traced the actual consequence end to end (mapterhorn-japan-bridge
+    # DECISIONS.md D115): this script would (1) rm -f the local final
+    # archive unconditionally, (2) run bundle.py against the empty
+    # layered tree -- which does NOT crash, it just produces 0 files and
+    # exits 0, so nothing downstream catches it, (3) merge_japan_bundles.py
+    # then runs on empty input, (4) ssh stars rm -f the LIVE PUBLISHED
+    # archive, then (5) rsync a file that was deleted in step 1 and never
+    # recreated (this script never even runs the z0-7 overview splice --
+    # it rsyncs a plain 'mapterhorn-japan-bridge.pmtiles' that nothing
+    # here produces; the D109 rename made the real intermediate name
+    # '.z8plus.pmtiles'). Net effect: all three copies (local final,
+    # local z8plus intermediate, live published) gone, nothing republished.
+    # Refuse to run until this is properly repaired (D115 plan step 1.2:
+    # reconcile flat-vs-layered source, fix the D109 naming drift, add the
+    # missing z0-7 splice step) and this guard is removed by that fix.
+    import sys as _sys
+    print('REFUSING TO RUN: publish_cycle.py is stale against the current '
+          'pmtiles-store layout and would destroy the local and published '
+          'archives without replacing them. See mapterhorn-japan-bridge '
+          'DECISIONS.md D115 for the full trace and the repair plan '
+          '(step 1.2) before removing this guard.', file=_sys.stderr)
+    _sys.exit(1)
+
     lock_file = open(LOCK_PATH, 'w')
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
