@@ -258,12 +258,39 @@ def get_pmtiles_folder(x, y, z, layer, datatype='elevation'):
     assert datatype in DATATYPES, f'unknown datatype {datatype!r}'
     prefix = f'pmtiles-store/{layer}/{datatype}'
     if z < 7:
-        return prefix
-    if z == 7:
-        return f'{prefix}/{z}-{x}-{y}'
+        bucket = prefix
+    elif z == 7:
+        bucket = f'{prefix}/{z}-{x}-{y}'
     else:
         parent = mercantile.parent(mercantile.Tile(x=x, y=y, z=z), zoom=7)
-        return f'{prefix}/{parent.z}-{parent.x}-{parent.y}'
+        bucket = f'{prefix}/{parent.z}-{parent.x}-{parent.y}'
+
+    # D115 TEMPORARY FALLBACK -- REMOVE BEFORE 1.5-GO FLIGHT: 1-go's
+    # entire production dataset (14,590 files, ~579GB as of 2026-09-03)
+    # predates the D95/D107 layer-namespace split above and still lives
+    # in the old flat `pmtiles-store/{z7bucket}/...` layout (no
+    # layer/datatype prefix at all). Rather than fork a parallel
+    # "_1go"-suffixed copy of every caller (the path this session
+    # already regretted taking for bundle.py -- see D115), fall back
+    # here, in the one function every caller already goes through: if
+    # this z7 bucket doesn't exist yet under the new layered prefix,
+    # check whether the OLD flat bucket exists instead, and use that.
+    # This is a per-bucket check, not per-file -- correct because 1-go's
+    # and 1.5-go's data never interleave within the same z7 bucket (each
+    # generation's own run writes exclusively to one layout or the
+    # other). Delete this fallback once 1-go's repair work (D114/D115)
+    # is finished and 1.5-go is the only generation still being read --
+    # at that point every real bucket will exist under the new prefix
+    # and this branch will simply never trigger, so leaving it in
+    # instead of deleting it would just be dead code hiding the fact
+    # that two layouts ever coexisted.
+    if z >= 7 and not os.path.isdir(bucket):
+        old_bucket = bucket[len(prefix) + 1:] if z >= 7 else ''
+        flat_bucket = f'pmtiles-store/{old_bucket}' if old_bucket else 'pmtiles-store'
+        if os.path.isdir(flat_bucket):
+            return flat_bucket
+
+    return bucket
 
 def resolve_layer(aggregation_id, z, x, y, child_z):
     """Which layer produced (or should produce) the pmtiles-store file
