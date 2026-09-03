@@ -168,9 +168,17 @@ def check_and_fix_pmtiles(pmtiles_dir='pmtiles-store', dry_run=False):
                 print(f"\nRemoving: {filepath}")
                 os.remove(filepath)
 
-                # Remove corresponding .done marker
+                # Remove corresponding .done marker. The broken file's own
+                # path says which datatype tree it sat in (D107 layout), so
+                # remove that datatype's marker: elevation's
+                # '-downsampling.done' or lineage's
+                # '-downsampling.lineage.done' (never both blindly -- the
+                # other datatype's archive at this position may be fine).
                 basename = os.path.basename(filepath).replace('.pmtiles', '')
-                done_files = glob(f'aggregation-store/*/{basename}-downsampling.done')
+                marker_suffix = ('-downsampling.lineage.done'
+                                 if '/lineage/' in filepath
+                                 else '-downsampling.done')
+                done_files = glob(f'aggregation-store/*/{basename}{marker_suffix}')
                 for done_file in done_files:
                     print(f"  Removed .done: {done_file}")
                     os.remove(done_file)
@@ -189,7 +197,12 @@ def regenerate_matching_files(pattern, dry_run=False):
 
     Pattern: can be a filename fragment like '15-15170-15611-20'
     """
-    done_files = glob(f'aggregation-store/*/{pattern}-downsampling.done')
+    # Both datatypes' markers (elevation's historical name + lineage's
+    # own '-downsampling.lineage.done', D120 Fable #6): a manual
+    # regeneration request for a position should retry whichever
+    # datatype(s) were built there.
+    done_files = (glob(f'aggregation-store/*/{pattern}-downsampling.done')
+                  + glob(f'aggregation-store/*/{pattern}-downsampling.lineage.done'))
 
     if not done_files:
         print(f"No .done files found matching pattern: {pattern}")
@@ -199,7 +212,8 @@ def regenerate_matching_files(pattern, dry_run=False):
     print(f"Files to regenerate: {len(done_files)}\n")
 
     for done_file in done_files:
-        csv_file = done_file.replace('-downsampling.done', '-downsampling.csv')
+        csv_file = done_file.replace('-downsampling.lineage.done', '-downsampling.csv') \
+                            .replace('-downsampling.done', '-downsampling.csv')
         print(f"  - {csv_file.split('/')[-1]}")
         if not dry_run:
             os.remove(done_file)
@@ -296,7 +310,7 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
             # filename alone can't tell (see utils.resolve_layer()'s own
             # docstring), so resolve it per-reference rather than assume.
             child_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
-            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=child_layer, datatype=DOWNSAMPLING_DATATYPE)
+            pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=child_layer, datatype=DOWNSAMPLING_DATATYPE, generation_id=aggregation_id)
             filepath = f'{pmtiles_folder}/{filename}'
 
             # filename came from this item's own downsampling.csv, written once by
@@ -424,21 +438,17 @@ def main(filepaths):
         for j, filepath in enumerate(filepaths):
             _, aggregation_id, filename = filepath.split('/')
             print(f'downsampling {filename}. {datetime.now()}. {j + 1} / {len(filepaths)}.')
-            if os.path.isfile(filepath.replace("-downsampling.csv", "-downsampling.done")):
-                print('already done...')
-                continue
             parts = filename.split('-')
             extent_z, extent_x, extent_y, parent_zoom = [int(a) for a in parts[:4]]
 
             # This item's own output is always a downsampling-layer file --
             # downsampling_run.py never writes aggregation-layer leaves.
-            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z, layer='downsampling', datatype=DOWNSAMPLING_DATATYPE)
+            out_folder = utils.get_pmtiles_folder(extent_x, extent_y, extent_z, layer='downsampling', datatype=DOWNSAMPLING_DATATYPE, generation_id=aggregation_id)
             utils.create_folder(out_folder)
             out_filepath = f'{out_folder}/{extent_z}-{extent_x}-{extent_y}-{parent_zoom}.pmtiles'
 
             extent = mercantile.Tile(x=extent_x, y=extent_y, z=extent_z)
             tmp_folder = filepath.replace('-downsampling.csv', '-tmp')
-            utils.create_folder(tmp_folder)
 
             pmtiles_filenames = None
             with open(filepath) as f:
@@ -447,15 +457,34 @@ def main(filepaths):
                 pmtiles_filenames = [a.strip() for a in pmtiles_filenames]
 
             print(f'Referenced PMTiles files: {pmtiles_filenames[:3]}... (total: {len(pmtiles_filenames)})')
-            # Check if referenced files exist
+            # Check if referenced files exist, and collect the fingerprint
+            # entries for the .done manifest at the same time (the same
+            # resolved paths serve both purposes).
             missing_files = []
+            input_entries = [utils.content_input_entry(filepath)]
             for pmtiles_filename in pmtiles_filenames:
                 file_z, file_x, file_y, file_child_z = [int(a) for a in pmtiles_filename.replace('.pmtiles', '').split('-')]
                 file_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
-                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer, datatype=DOWNSAMPLING_DATATYPE)
+                pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer, datatype=DOWNSAMPLING_DATATYPE, generation_id=aggregation_id)
                 filepath_check = f'{pmtiles_folder}/{pmtiles_filename}'
+                input_entries.append(utils.stat_input_entry(filepath_check))
                 if not os.path.isfile(filepath_check):
                     missing_files.append(pmtiles_filename)
+
+            # D119 P2.B/D120 Fable #6: datatype-scoped marker (an elevation
+            # pass can no longer make the lineage pass skip everything) +
+            # inputs-fingerprint freshness gate (a repaired/replaced child
+            # automatically invalidates this overview -- the mechanism whose
+            # absence left 949/8,223 overviews stale in 1-go's published
+            # archive). Legacy empty markers stay valid for elevation.
+            done_path = utils.downsampling_done_path(filepath, DOWNSAMPLING_DATATYPE)
+            if utils.done_is_current(done_path, [DOWNSAMPLING_DATATYPE], input_entries):
+                print('already done (and inputs unchanged)...')
+                continue
+            if utils.done_covers(done_path, [DOWNSAMPLING_DATATYPE]):
+                print('done marker exists but inputs changed -- rebuilding stale overview (D119).')
+
+            utils.create_folder(tmp_folder)
 
             if missing_files:
                 print(f'WARNING: {len(missing_files)} PMTiles files not found: {missing_files[:3]}...')
@@ -494,7 +523,19 @@ def main(filepaths):
             utils.create_archive(tmp_folder, out_filepath)
 
             shutil.rmtree(tmp_folder)
-            utils.run_command(f'touch {filepath.replace("-downsampling.csv", "-downsampling.done")}')
+            # Record the PRE-run input entries (collected above, before any
+            # tile was read): if a child changed mid-run, the recorded
+            # fingerprint won't match the on-disk state on the next pass,
+            # so the item correctly reads as stale and gets rebuilt --
+            # recording post-run stats instead would paper over exactly
+            # that race.
+            utils.write_done_manifest(
+                done_path,
+                datatypes=[DOWNSAMPLING_DATATYPE],
+                generation_id=aggregation_id,
+                entries=input_entries,
+                extra={'output': out_filepath},
+            )
 
 def tiles_intersect(a, b):
     if a == b:

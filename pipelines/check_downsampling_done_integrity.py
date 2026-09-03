@@ -29,22 +29,27 @@ from glob import glob
 import utils
 
 
-def audit(aggregation_id):
+def audit(aggregation_id, datatype='elevation'):
     agg_dir = f'aggregation-store/{aggregation_id}'
-    done_files = glob(f'{agg_dir}/*-downsampling.done')
-    print(f'total .done markers: {len(done_files):_}')
+    marker_suffix = ('-downsampling.done' if datatype == 'elevation'
+                     else '-downsampling.lineage.done')
+    done_files = glob(f'{agg_dir}/*{marker_suffix}')
+    print(f'total {datatype} .done markers: {len(done_files):_}')
 
     stale = []
     healthy = 0
     for done_path in done_files:
         filename = os.path.basename(done_path)
-        base = filename.replace('-downsampling.done', '')
+        base = filename.replace(marker_suffix, '')
         z, x, y, parent_zoom = [int(a) for a in base.split('-')]
         # z (the extent's own zoom), not parent_zoom -- matches
         # downsampling_run.py's own main() -> get_pmtiles_folder(extent_x,
         # extent_y, extent_z, layer='downsampling') call. This audits
-        # downsampling_run.py's own output, always that layer (D95/D107).
-        folder = utils.get_pmtiles_folder(x, y, z, layer='downsampling')
+        # downsampling_run.py's own output, always that layer (D95/D107),
+        # in this generation's own subtree.
+        folder = utils.get_pmtiles_folder(x, y, z, layer='downsampling',
+                                          datatype=datatype,
+                                          generation_id=aggregation_id)
         filepath = f'{folder}/{base}.pmtiles'
         if os.path.isfile(filepath):
             healthy += 1
@@ -67,12 +72,15 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('aggregation_id')
     parser.add_argument(
+        '--datatype', choices=utils.DATATYPES, default='elevation',
+        help='which datatype pyramid to audit (each has its own markers, D120 Fable #6)')
+    parser.add_argument(
         '--fix', action='store_true',
         help='delete stale .done markers so downsampling_run.py retries them '
              '(only run once aggregation_run.py has fully finished -- see module docstring)')
     args = parser.parse_args()
 
-    stale_paths = audit(args.aggregation_id)
+    stale_paths = audit(args.aggregation_id, datatype=args.datatype)
 
     if args.fix:
         if not stale_paths:

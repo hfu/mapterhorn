@@ -1,4 +1,5 @@
 from glob import glob
+import os
 
 import mercantile
 
@@ -75,8 +76,12 @@ def write_downsampling_items():
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
 
-    command = f'rm aggregation-store/{aggregation_id}/*-downsampling.csv'
-    utils.run_command(command)
+    # Plain glob expansion, not `rm` via shell: on a fresh generation the
+    # pattern matches nothing, which would make bare `rm` exit nonzero --
+    # harmless before, but run_command() now raises on failure (D120
+    # Fable #3), so do the idempotent-delete in-process instead.
+    for stale_csv in glob(f'aggregation-store/{aggregation_id}/*-downsampling.csv'):
+        os.remove(stale_csv)
 
     # min_output_zoom=8 (2026-08-30, Hidenori's design): our own aggregation
     # coverage has real, structural no-data gaps in deep-ocean areas far from

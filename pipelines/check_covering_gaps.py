@@ -47,7 +47,12 @@ def main():
             referenced = [a.strip() for a in f.readlines()[1:]]
         for ref in referenced:
             rz, rx, ry, r_parent_zoom = [int(a) for a in ref.replace('.pmtiles', '').split('-')]
-            folder = utils.get_pmtiles_folder(rx, ry, rz)
+            # Fixed 2026-09-04: this call predated D95/D107's required
+            # `layer` argument (it would have raised TypeError if run) --
+            # a referenced child may be either layer, so resolve it the
+            # same way downsampling_run.py does.
+            ref_layer = utils.resolve_layer(AGG_ID, rz, rx, ry, r_parent_zoom)
+            folder = utils.get_pmtiles_folder(rx, ry, rz, layer=ref_layer, generation_id=AGG_ID)
             if os.path.isfile(f'{folder}/{ref}'):
                 continue  # this reference is fine, not a gap
             ref_csv = f'{AGG_DIR}/{rz}-{rx}-{ry}-{r_parent_zoom}-downsampling.csv'

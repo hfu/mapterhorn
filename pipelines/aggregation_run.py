@@ -65,6 +65,7 @@ def emit_lineage(filepath, tmp_folder):
     is exactly why lineage_inspect.py's own standalone diagnostic never
     calls merge() at all -- reused here, not rediscovered."""
     filename = filepath.split('/')[-1]
+    aggregation_id = filepath.split('/')[-2]
     z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
 
     groups = utils.get_grouped_source_items(filepath)
@@ -74,7 +75,7 @@ def emit_lineage(filepath, tmp_folder):
     with open(f'{tmp_folder}/reprojection.json') as f:
         buffer_pixels = json.load(f)['buffer_pixels']
 
-    lineage_tile.main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder)
+    lineage_tile.main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder, aggregation_id)
 
 def run(filepath):
     filename = filepath.split('/')[-1]
@@ -85,7 +86,15 @@ def run(filepath):
     # update: this was upstream's own pre-Manager/Worker behavior, dropped by
     # 6cdf66b's global `tmp-store/{item}` layout).
     aggregation_id = filepath.split('/')[-2]
-    if os.path.isfile(f'{filepath}.done'):
+    # D119 P2.B/D120 Fable #6: the .done marker is now a manifest that
+    # records WHICH datatypes it certifies. An elevation-only .done (all
+    # of 1-go's markers, and any pre-manifest legacy touch file) no
+    # longer silently satisfies an EMIT_LINEAGE run -- that was the hard
+    # blocker that would have made a lineage pass over an already-
+    # aggregated generation a national-scale no-op.
+    required_datatypes = ['elevation', 'lineage'] if EMIT_LINEAGE else ['elevation']
+    done_path = f'{filepath}.done'
+    if utils.done_covers(done_path, required_datatypes):
         print(f'Aggregation item {item} already done. Skipping...')
         return
     print(f'{item} start')
@@ -97,7 +106,22 @@ def run(filepath):
     aggregation_merge.merge(filepath, tmp_folder)
     aggregation_tile.main(filepath, tmp_folder)
     shutil.rmtree(tmp_folder)
-    os.rename(f'{filepath}.todo', f'{filepath}.done')
+    # Fingerprint the covering CSV by content (not mtime -- coverings are
+    # rewritten byte-identical between runs): the same signal
+    # get_dirty_aggregation_filenames() already treats as this item's
+    # identity. Written atomically; the old .todo -> .done rename is
+    # replaced by manifest-write + best-effort .todo removal (a missing
+    # .todo is no longer an error -- D110's rehearsal tripped over that).
+    utils.write_done_manifest(
+        done_path,
+        datatypes=required_datatypes,
+        generation_id=aggregation_id,
+        entries=[utils.content_input_entry(filepath)],
+    )
+    try:
+        os.remove(f'{filepath}.todo')
+    except FileNotFoundError:
+        pass
     print(f'{item} end')
 
 def main():

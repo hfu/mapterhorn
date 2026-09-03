@@ -29,7 +29,11 @@ for filepath in all_csv:
         continue  # this one did get processed via .todo -> skip
     base = filename.replace('-aggregation.csv', '')
     z, x, y, child_z = [int(a) for a in base.split('-')]
-    folder = utils.get_pmtiles_folder(x, y, z)
+    # Fixed 2026-09-04: this call predated D95/D107's required `layer`
+    # argument (it would have raised TypeError if run) -- aggregation
+    # items' own output is always the aggregation layer, in this
+    # generation's own subtree.
+    folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', generation_id=CURRENT_ID)
     out_filepath = f'{folder}/{base}.pmtiles'
     if not os.path.isfile(out_filepath):
         missing_output += 1

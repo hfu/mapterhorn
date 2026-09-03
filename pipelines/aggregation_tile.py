@@ -75,6 +75,9 @@ def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
 
 def main(filepath, tmp_folder):
     filename = filepath.split('/')[-1]
+    # aggregation-store/{aggregation_id}/{filename} -- the generation this
+    # item (and therefore its pmtiles-store output) belongs to.
+    aggregation_id = filepath.split('/')[-2]
 
     z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
 
@@ -97,17 +100,26 @@ def main(filepath, tmp_folder):
     tiff_filepath = f'{tmp_folder}/merged-3857.tiff'
 
     aggregation_tile = mercantile.Tile(x=x, y=y, z=z)
-    out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation')
+    out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', generation_id=aggregation_id)
     utils.create_folder(out_folder)
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
-    # Remove stale prior-generation output at this exact macrotile position (same
-    # z-x-y, different child_z) so bundle.py's own glob of the aggregation layer
-    # never mixes an old run's now-superseded archive in alongside this run's
-    # current one -- pmtiles-store is otherwise never cleaned between runs
-    # (DECISIONS.md D12's open question).
-    # get_pmtiles_folder() buckets by z7 parent, so out_folder can hold many
-    # unrelated macrotiles' files; the z-x-y-prefixed glob (not out_folder-wide)
-    # keeps this scoped to just this position's own prior generations.
+    # Remove stale prior-RUN output at this exact macrotile position (same
+    # z-x-y, different child_z -- a position's maxzoom can change when its
+    # source composition changes between reprocessings WITHIN this same
+    # generation) so bundle.py's own glob of the aggregation layer never
+    # mixes a superseded archive in alongside the current one --
+    # pmtiles-store is otherwise never cleaned between runs (DECISIONS.md
+    # D12's open question).
+    # Scope safety (audited 2026-09-04 for the generation_id layout):
+    # out_folder is now `pmtiles-store/aggregation/elevation/
+    # {aggregation_id}/{z7bucket}` -- aggregation layer only, elevation
+    # datatype only, THIS generation only. get_pmtiles_folder() buckets by
+    # z7 parent, so out_folder can hold many unrelated macrotiles' files;
+    # the z-x-y-prefixed glob (not out_folder-wide) keeps this scoped to
+    # just this position's own prior outputs. Another generation's files
+    # (including 1-go's legacy flat tree, unreachable here since the
+    # legacy fallback is gated to 1-go's own generation_id) and the
+    # lineage datatype's files can never match this glob.
     for stale_filepath in glob(f'{out_folder}/{z}-{x}-{y}-*.pmtiles'):
         if stale_filepath != out_filepath:
             os.remove(stale_filepath)

@@ -28,7 +28,7 @@ mtimes = []
 for fp in files:
     fn = fp.split('/')[-1].replace('-aggregation.csv.done', '')
     z, x, y, childz = [int(a) for a in fn.split('-')]
-    folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation')
+    folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', generation_id=gen)
     p = f'{folder}/{fn}.pmtiles'
     if os.path.isfile(p):
         m = os.path.getmtime(p)

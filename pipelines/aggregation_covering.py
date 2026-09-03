@@ -1,4 +1,5 @@
 from glob import glob
+import os
 
 import mercantile
 from ulid import ULID
@@ -223,7 +224,13 @@ def main():
     print('get aggregation tiles...')
     aggregation_tiles = get_aggregation_tiles(macrotile_map)
 
-    aggregation_id = str(ULID())
+    # AGGREGATION_ID override (2026-09-04): lets a generation's ULID be
+    # minted AHEAD of the covering run and recorded in PLAN.md section
+    # 0's generation table first -- so the id in the table is guaranteed
+    # to be the id the run actually uses (1.5号's id was pre-minted this
+    # way). Without the override, behavior is unchanged: a fresh ULID.
+    aggregation_id = os.environ.get('AGGREGATION_ID') or str(ULID())
+    print(f'aggregation (generation) id: {aggregation_id}')
     utils.create_folder(f'aggregation-store/{aggregation_id}')
 
     print('write aggregation items...')

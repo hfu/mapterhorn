@@ -1,5 +1,7 @@
 import subprocess
 import gzip
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from glob import glob
 import math
@@ -36,7 +38,18 @@ num_overviews = 6
 
 X_MIN_3857, _, X_MAX_3857, __ = transform_bounds('EPSG:4326', 'EPSG:3857', -180, 0, 180, 0)
 
-def run_command(command, silent=True, env=None):
+def run_command(command, silent=True, env=None, check=True):
+    """Run a shell command, capturing stdout/stderr.
+
+    `check=True` (the default, mapterhorn-japan-bridge DECISIONS.md D120
+    Fable review item #3): a nonzero exit status raises RuntimeError
+    instead of being silently swallowed. The old always-ignore behavior
+    let e.g. source_to_cog.py delete its input file right after a FAILED
+    gdal_translate conversion -- the exact "unconditional delete after a
+    failed conversion" hazard the review flagged. Callers that genuinely
+    tolerate failure must say so explicitly with check=False; none
+    currently do.
+    """
     if env is None:
         env = os.environ.copy()
     if not silent:
@@ -49,6 +62,11 @@ def run_command(command, silent=True, env=None):
     out = stdout.decode()
     if out != '' and not silent:
         print(out)
+    if check and p.returncode != 0:
+        raise RuntimeError(
+            f'command failed (exit {p.returncode}): {command}\n'
+            f'stderr (tail): {err[-2000:]}'
+        )
     return out, err
 
 def create_folder(path):
@@ -243,20 +261,45 @@ def get_dirty_aggregation_filenames(current_aggregation_id, last_aggregation_id)
 LAYERS = ('aggregation', 'downsampling')
 DATATYPES = ('elevation', 'lineage')
 
-def get_pmtiles_folder(x, y, z, layer, datatype='elevation'):
-    """mapterhorn-japan-bridge DECISIONS.md D95/D107: pmtiles-store is
-    split by `layer` (aggregation leaf output vs. downsampling pyramid
-    output) and by `datatype` (elevation vs. lineage) so that no single
-    filename pattern is shared between things that get created,
-    renamed, or deleted independently -- the root cause of D74-D76's
-    3,344-item aggregation loss. Every caller must know which layer/
-    datatype it is locating; when it doesn't (downsampling_run.py
-    resolving a *child* reference, which may itself be either layer),
-    use resolve_layer() first rather than guessing.
+# 1-go (the first full national generation) predates both the D95/D107
+# layer/datatype split and the generation_id level below -- its entire
+# production dataset lives in the old flat `pmtiles-store/{z7bucket}/...`
+# layout. This is the ONLY generation the legacy-flat fallback below may
+# ever resolve to; every other generation (1.5-go onward) lives strictly
+# inside its own `pmtiles-store/{layer}/{datatype}/{generation_id}/`
+# subtree. See PLAN.md section 0 for the generation_id <-> label table.
+FLAT_LEGACY_GENERATION_ID = '01M0MWK852631SHCHPA66F21WQ'
+
+def get_pmtiles_folder(x, y, z, layer, datatype='elevation', generation_id=None):
+    """mapterhorn-japan-bridge DECISIONS.md D95/D107 (+ generation_id,
+    2026-09-04): pmtiles-store is split by `layer` (aggregation leaf
+    output vs. downsampling pyramid output), by `datatype` (elevation vs.
+    lineage), and by `generation_id` (the aggregation-store ULID this
+    file belongs to) so that no single filename pattern is shared between
+    things that get created, renamed, or deleted independently -- the
+    root cause of D74-D76's 3,344-item aggregation loss. The
+    generation_id level closes the last gap: without it, 1.5-go and 2-go
+    would both write into the same layered tree and the D74-D76 pattern
+    would recur the moment two layered generations coexist (the
+    "structure difference was only accidental protection" finding in the
+    1.5-go prep plan). Every caller must know which layer/datatype/
+    generation it is locating; when it doesn't know the layer
+    (downsampling_run.py resolving a *child* reference, which may itself
+    be either layer), use resolve_layer() first rather than guessing.
+
+    `generation_id` is deliberately required (no default): a partial
+    update of call sites -- exactly the D74-D76 failure mode -- fails
+    loudly as a TypeError/ValueError instead of silently writing into a
+    shared location.
     """
     assert layer in LAYERS, f'unknown layer {layer!r}'
     assert datatype in DATATYPES, f'unknown datatype {datatype!r}'
-    prefix = f'pmtiles-store/{layer}/{datatype}'
+    if not generation_id:
+        raise ValueError(
+            'get_pmtiles_folder() now requires generation_id (the '
+            'aggregation-store ULID) -- see D74-D76/D95 and PLAN.md '
+            'section 0. Refusing to guess.')
+    prefix = f'pmtiles-store/{layer}/{datatype}/{generation_id}'
     if z < 7:
         bucket = prefix
     elif z == 7:
@@ -265,28 +308,20 @@ def get_pmtiles_folder(x, y, z, layer, datatype='elevation'):
         parent = mercantile.parent(mercantile.Tile(x=x, y=y, z=z), zoom=7)
         bucket = f'{prefix}/{parent.z}-{parent.x}-{parent.y}'
 
-    # D115 TEMPORARY FALLBACK -- REMOVE BEFORE 1.5-GO FLIGHT: 1-go's
-    # entire production dataset (14,590 files, ~579GB as of 2026-09-03)
-    # predates the D95/D107 layer-namespace split above and still lives
-    # in the old flat `pmtiles-store/{z7bucket}/...` layout (no
-    # layer/datatype prefix at all). Rather than fork a parallel
-    # "_1go"-suffixed copy of every caller (the path this session
-    # already regretted taking for bundle.py -- see D115), fall back
-    # here, in the one function every caller already goes through: if
-    # this z7 bucket doesn't exist yet under the new layered prefix,
-    # check whether the OLD flat bucket exists instead, and use that.
-    # This is a per-bucket check, not per-file -- correct because 1-go's
-    # and 1.5-go's data never interleave within the same z7 bucket (each
-    # generation's own run writes exclusively to one layout or the
-    # other). Delete this fallback once 1-go's repair work (D114/D115)
-    # is finished and 1.5-go is the only generation still being read --
-    # at that point every real bucket will exist under the new prefix
-    # and this branch will simply never trigger, so leaving it in
-    # instead of deleting it would just be dead code hiding the fact
-    # that two layouts ever coexisted.
-    if z >= 7 and not os.path.isdir(bucket):
-        old_bucket = bucket[len(prefix) + 1:] if z >= 7 else ''
-        flat_bucket = f'pmtiles-store/{old_bucket}' if old_bucket else 'pmtiles-store'
+    # D115 LEGACY-FLAT FALLBACK, now hard-gated to 1-go only: 1-go's
+    # production dataset (14,590 files, ~579GB as of 2026-09-03) still
+    # lives in the old flat `pmtiles-store/{z7bucket}/...` layout (no
+    # layer/datatype/generation prefix at all). Tools pointed at 1-go
+    # (audits, monitoring, any residual repair) keep working through this
+    # branch; for ANY other generation_id this branch is unreachable, so
+    # a 1.5-go/2-go write or cleanup glob can never land in (or delete
+    # from) 1-go's flat tree -- the exact hazard the pre-generation_id
+    # version of this fallback carried (a fresh 1.5-go write at a
+    # position whose new bucket didn't exist yet would have fallen back
+    # into 1-go's live flat bucket, and aggregation_tile.py's stale-
+    # cleanup glob would then have deleted 1-go production files).
+    if generation_id == FLAT_LEGACY_GENERATION_ID and z >= 7 and not os.path.isdir(bucket):
+        flat_bucket = f'pmtiles-store/{bucket[len(prefix) + 1:]}'
         if os.path.isdir(flat_bucket):
             return flat_bucket
 
@@ -309,6 +344,131 @@ def resolve_layer(aggregation_id, z, x, y, child_z):
     """
     agg_csv = f'aggregation-store/{aggregation_id}/{z}-{x}-{y}-{child_z}-aggregation.csv'
     return 'aggregation' if os.path.isfile(agg_csv) else 'downsampling'
+
+# --- .done manifest machinery (mapterhorn-japan-bridge DECISIONS.md D119
+# P2.B design + D120 Fable review item #6, implemented 2026-09-04) ---
+#
+# The old `.done` markers were empty touch files: no record of WHICH
+# datatype finished (so an elevation pass made the later lineage pass
+# silently skip every item -- the hard blocker for 1.5-go) and no record
+# of WHAT inputs it was built from (so a repaired leaf never invalidated
+# the overviews above it -- 949/8,223 items, 11.5%, measurably stale in
+# 1-go's published archive, D119). A `.done` file is now a small JSON
+# manifest carrying both: the datatypes it certifies and a fingerprint of
+# the inputs it was built from. Legacy empty markers (1-go) parse as "{}"
+# and are treated as elevation-only with unknown freshness, so nothing in
+# 1-go churns.
+
+DONE_MANIFEST_FORMAT = 'mjb-done-manifest/1'
+
+def stat_input_entry(path):
+    """Fingerprint entry for a large binary input (a child .pmtiles):
+    size + mtime_ns, no content read. A missing input gets an explicit
+    marker entry -- so an item completed with a hole (non-STRICT mode)
+    automatically reads as stale once the missing child appears."""
+    try:
+        st = os.stat(path)
+        return {'path': path, 'size': st.st_size, 'mtime_ns': st.st_mtime_ns}
+    except OSError:
+        return {'path': path, 'missing': True}
+
+def content_input_entry(path):
+    """Fingerprint entry for a small text input (a covering .csv), hashed
+    by CONTENT, not mtime -- downsampling_covering.py regenerates every
+    .csv (identical bytes, fresh mtime) each publish cycle, and an
+    mtime-based entry would mark the whole pyramid stale every cycle."""
+    h = hashlib.sha256()
+    try:
+        with open(path, 'rb') as f:
+            h.update(f.read())
+        return {'path': path, 'sha256': h.hexdigest()}
+    except OSError:
+        return {'path': path, 'missing': True}
+
+def compute_inputs_fingerprint(entries):
+    h = hashlib.sha256()
+    for e in sorted(entries, key=lambda e: e['path']):
+        if e.get('missing'):
+            h.update(f"{e['path']}\tMISSING\n".encode())
+        elif 'sha256' in e:
+            h.update(f"{e['path']}\tsha256:{e['sha256']}\n".encode())
+        else:
+            h.update(f"{e['path']}\t{e['size']}\t{e['mtime_ns']}\n".encode())
+    return f'sha256:{h.hexdigest()}'
+
+def write_done_manifest(done_path, datatypes, generation_id, entries, extra=None):
+    """Atomically write a .done manifest (same same-directory-tmp +
+    os.replace pattern as create_archive(), so a reader never sees a
+    half-written marker)."""
+    manifest = {
+        'format': DONE_MANIFEST_FORMAT,
+        'datatypes': sorted(set(datatypes)),
+        'generation_id': generation_id,
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        'inputs': sorted(entries, key=lambda e: e['path']),
+        'inputs_fingerprint': compute_inputs_fingerprint(entries),
+    }
+    if extra:
+        manifest.update(extra)
+    tmp_path = f'{done_path}.tmp-{os.getpid()}'
+    with open(tmp_path, 'w') as f:
+        json.dump(manifest, f, indent=1)
+    os.replace(tmp_path, done_path)
+
+def read_done_manifest(done_path):
+    """None = no marker at all. {} = legacy empty/unparseable marker
+    (1-go's touch files). dict = a real manifest."""
+    if not os.path.isfile(done_path):
+        return None
+    try:
+        with open(done_path) as f:
+            manifest = json.load(f)
+    except (ValueError, OSError):
+        return {}
+    if not isinstance(manifest, dict) or manifest.get('format') != DONE_MANIFEST_FORMAT:
+        return {}
+    return manifest
+
+def done_covers(done_path, required_datatypes):
+    """Does this marker certify all of `required_datatypes`? (No
+    freshness check -- see done_is_current() for that.) Legacy empty
+    markers certify elevation only: they predate lineage entirely."""
+    manifest = read_done_manifest(done_path)
+    if manifest is None:
+        return False
+    if not manifest:
+        return set(required_datatypes) <= {'elevation'}
+    return set(required_datatypes) <= set(manifest.get('datatypes', []))
+
+def done_is_current(done_path, required_datatypes, entries):
+    """done_covers() plus the D119 freshness gate: False when the
+    recorded inputs fingerprint no longer matches `entries` (the same
+    entry list the caller would record on completion), i.e. an input was
+    repaired/replaced/added since this marker was written -- the caller
+    should rebuild. Legacy empty markers have no fingerprint to compare;
+    they stay 'current' for elevation (deliberate: never churn 1-go)."""
+    manifest = read_done_manifest(done_path)
+    if manifest is None:
+        return False
+    if not manifest:
+        return set(required_datatypes) <= {'elevation'}
+    if not set(required_datatypes) <= set(manifest.get('datatypes', [])):
+        return False
+    return compute_inputs_fingerprint(entries) == manifest.get('inputs_fingerprint')
+
+def downsampling_done_path(csv_path, datatype):
+    """Datatype-scoped .done marker path for one downsampling item (D120
+    Fable review item #6). elevation keeps the historical
+    '-downsampling.done' name (1-go compat, and every existing audit
+    glob); lineage gets '-downsampling.lineage.done' -- distinct
+    filenames, so one datatype's pass can never make the other's
+    silently skip. (The lineage name deliberately does NOT match the
+    `*-downsampling.done` glob pattern, keeping legacy tooling
+    elevation-only rather than double-counting.)"""
+    assert datatype in DATATYPES, f'unknown datatype {datatype!r}'
+    suffix = '-downsampling.done' if datatype == 'elevation' else '-downsampling.lineage.done'
+    assert csv_path.endswith('-downsampling.csv'), csv_path
+    return csv_path[:-len('-downsampling.csv')] + suffix
 
 # GSI's own DEM naming embeds a product-type letter after the resolution
 # digits (e.g. ...-DEM5A-, ...-DEM10B-): A = airborne laser (LiDAR,

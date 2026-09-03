@@ -16,6 +16,18 @@ cluster the multi-hundred-GB source first.
 
 Usage: uv run python3 extract_z8plus.py <input.pmtiles> <output.pmtiles>
 """
+import os
+
+# D104/D105/D120 Fable review item #2: pmtiles.writer.Writer buffers via
+# tempfile.TemporaryFile(), which lands on the small boot volume unless
+# TMPDIR is force-overridden before tempfile resolves it (setdefault is a
+# no-op -- macOS sessions always have TMPDIR set already). Same block as
+# bundle.py/merge_japan_bundles.py/aggregation_run.py.
+os.environ['TMPDIR'] = os.path.abspath('pmtiles-store/tmp-store/writer-scratch/')
+os.makedirs(os.environ['TMPDIR'], exist_ok=True)
+import tempfile
+tempfile.tempdir = None  # drop any cached resolution from before this line ran
+
 import sys
 
 import mercantile

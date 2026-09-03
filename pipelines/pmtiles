@@ -1,0 +1,44 @@
+#!/bin/sh
+# TMPDIR wrapper for the Go `pmtiles` CLI (mapterhorn-japan-bridge
+# DECISIONS.md D104/D105/D120 Fable review item #2, added 2026-09-04).
+#
+# `pmtiles cluster` / `pmtiles merge` / `pmtiles convert` create scratch
+# files in the OS temp dir, which on macOS defaults to the small boot
+# volume (/var/folders/...) -- a multi-hundred-GB operation there fills
+# the boot disk and has already corrupted a 310GB archive once (D104) and
+# left 97GB of orphaned scratch behind another time (D114/D120 #1). Until
+# now every manual invocation relied on the operator remembering to
+# `export TMPDIR=...` first, per screen session, by hand.
+#
+# This wrapper makes it automatic: invoke `./pmtiles ...` from the
+# pipelines directory (or via an absolute path to this script) instead of
+# the bare `pmtiles`, and TMPDIR is force-pointed at the big pmtiles-store
+# volume next to this script before the real binary runs. Works unchanged
+# in pipelines-rehearsal/ too: the wrapper resolves paths relative to its
+# own (symlinked) location, so the rehearsal env's scratch lands in the
+# rehearsal env's own store.
+#
+# `pmtiles verify` and `pmtiles show` don't need scratch space, but going
+# through the wrapper for them too is harmless -- one habit, no
+# exceptions to remember.
+set -eu
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+TMPDIR="$SCRIPT_DIR/pmtiles-store/tmp-store/go-cli-scratch"
+export TMPDIR
+mkdir -p "$TMPDIR"
+
+REAL_PMTILES=""
+for candidate in /opt/homebrew/bin/pmtiles /usr/local/bin/pmtiles; do
+    if [ -x "$candidate" ]; then
+        REAL_PMTILES="$candidate"
+        break
+    fi
+done
+if [ -z "$REAL_PMTILES" ]; then
+    echo "pmtiles wrapper: real pmtiles binary not found in /opt/homebrew/bin or /usr/local/bin" >&2
+    exit 127
+fi
+
+echo "pmtiles wrapper: TMPDIR=$TMPDIR" >&2
+exec "$REAL_PMTILES" "$@"

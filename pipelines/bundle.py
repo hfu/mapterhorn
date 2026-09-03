@@ -33,17 +33,23 @@ import utils
 # DOWNSAMPLING_DATATYPE, same env-var convention).
 BUNDLE_DATATYPE = os.environ.get('BUNDLE_DATATYPE', 'elevation')
 
-def get_parent_to_filepaths(only_dirty, num_aggregations, datatype='elevation'):
-    # D95/D107: pmtiles-store is split by layer (aggregation/downsampling)
-    # and datatype (elevation/lineage) -- bundle.py's job is to combine
-    # BOTH layers of one datatype into the final archive, so glob each
-    # layer's root separately rather than assuming a single shared tree
-    # the way the pre-D107 flat pmtiles-store/ did.
+def get_parent_to_filepaths(only_dirty, num_aggregations, datatype='elevation', generation_id=None):
+    # D95/D107 (+ generation_id, 2026-09-04): pmtiles-store is split by
+    # layer (aggregation/downsampling), datatype (elevation/lineage), and
+    # generation_id -- bundle.py's job is to combine BOTH layers of one
+    # datatype OF ONE GENERATION into the final archive, so glob each
+    # layer's generation subtree separately rather than assuming a single
+    # shared tree the way the pre-D107 flat pmtiles-store/ did. Globbing
+    # without the generation level would silently mix two generations'
+    # archives the moment a second layered generation exists (the exact
+    # D74-D76-class hazard the generation_id level closes).
+    if not generation_id:
+        raise ValueError('get_parent_to_filepaths() requires generation_id')
     filepaths = sorted(
-        glob(f'pmtiles-store/aggregation/{datatype}/*.pmtiles') +
-        glob(f'pmtiles-store/aggregation/{datatype}/*/*.pmtiles') +
-        glob(f'pmtiles-store/downsampling/{datatype}/*.pmtiles') +
-        glob(f'pmtiles-store/downsampling/{datatype}/*/*.pmtiles')
+        glob(f'pmtiles-store/aggregation/{datatype}/{generation_id}/*.pmtiles') +
+        glob(f'pmtiles-store/aggregation/{datatype}/{generation_id}/*/*.pmtiles') +
+        glob(f'pmtiles-store/downsampling/{datatype}/{generation_id}/*.pmtiles') +
+        glob(f'pmtiles-store/downsampling/{datatype}/{generation_id}/*/*.pmtiles')
     )
 
     parent_to_filepath = {}
@@ -274,8 +280,15 @@ def main():
         exit()
 
     dirty_only = False  # Bundling all files (not just dirty) to include new downsampling tiles
+    # Which generation's pmtiles-store subtree to bundle: default is the
+    # active (latest) aggregation-store generation, overridable with
+    # BUNDLE_GENERATION for deliberate work on an older one. Printed
+    # loudly so a wrong-generation bundle is visible in the first log
+    # line rather than discovered in the merged output.
+    generation_id = os.environ.get('BUNDLE_GENERATION') or utils.get_aggregation_ids()[-1]
     print(f'datatype: {BUNDLE_DATATYPE} (set BUNDLE_DATATYPE to override)')
-    parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations, datatype=BUNDLE_DATATYPE)
+    print(f'generation: {generation_id} (set BUNDLE_GENERATION to override; default = latest aggregation-store id)')
+    parent_to_filepaths = get_parent_to_filepaths(dirty_only, num_aggregations, datatype=BUNDLE_DATATYPE, generation_id=generation_id)
 
     # bundle_one() has no internal parallelism -- one region is one atomic,
     # single-threaded task (create_archive()'s writer needs tile-id-sorted

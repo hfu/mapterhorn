@@ -13,9 +13,14 @@ not touch `aggregation-store`/`pmtiles-store` at all.
 Usage: python3 check_downsampling_readiness.py [--list-not-ready N]
 """
 import argparse
+import os
 from glob import glob
 
 import utils
+
+# Mirrors downsampling_run.py's own datatype selection (D120 Fable #6:
+# each datatype has its own markers and its own pmtiles subtree).
+DOWNSAMPLING_DATATYPE = os.environ.get('DOWNSAMPLING_DATATYPE', 'elevation')
 
 
 def candidate_filepaths(aggregation_id):
@@ -32,7 +37,8 @@ def candidate_filepaths(aggregation_id):
 
 def check_readiness(filepath):
     """Returns (is_ready, is_already_done, referenced_count, missing_count)."""
-    if utils.os.path.isfile(filepath.replace('-downsampling.csv', '-downsampling.done')):
+    done_path = utils.downsampling_done_path(filepath, DOWNSAMPLING_DATATYPE)
+    if utils.done_covers(done_path, [DOWNSAMPLING_DATATYPE]):
         return True, True, None, 0
 
     # aggregation-store/{aggregation_id}/{filename} -- same split pattern
@@ -49,7 +55,9 @@ def check_readiness(filepath):
         # D95/D107: a referenced child may be either layer -- resolve
         # per-reference (mirrors downsampling_run.py's own check).
         file_layer = utils.resolve_layer(aggregation_id, file_z, file_x, file_y, file_child_z)
-        pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer)
+        pmtiles_folder = utils.get_pmtiles_folder(file_x, file_y, file_z, layer=file_layer,
+                                                  datatype=DOWNSAMPLING_DATATYPE,
+                                                  generation_id=aggregation_id)
         if not utils.os.path.isfile(f'{pmtiles_folder}/{pmtiles_filename}'):
             missing += 1
 

@@ -58,10 +58,12 @@ def create_lineage_tile(i, j, category_data, out_filepath, buffer_pixels):
     utils.save_lineage_tile(block, out_filepath, valid_mask=valid_mask)
 
 
-def main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder):
+def main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder, aggregation_id):
     """Called from aggregation_run.py's run() when EMIT_LINEAGE is set,
     right after lineage_provenance.local_provenance_to_global() produces
-    category_data. Writes its own block .webp files into a dedicated
+    category_data. `aggregation_id` is the generation this item belongs
+    to -- output goes into that generation's own pmtiles-store subtree.
+    Writes its own block .webp files into a dedicated
     `{tmp_folder}/lineage-blocks/` subfolder, NOT tmp_folder itself --
     aggregation_tile.py's own create_tiles() writes elevation block files
     named identically ({z}-{x}-{y}.webp) into the same tmp_folder later in
@@ -72,11 +74,12 @@ def main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder):
     utils.create_folder(blocks_folder)
 
     aggregation_tile = mercantile.Tile(x=x, y=y, z=z)
-    out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype='lineage')
+    out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype='lineage', generation_id=aggregation_id)
     utils.create_folder(out_folder)
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
-    # Same stale prior-generation cleanup as aggregation_tile.py's own
-    # elevation path, scoped to the lineage datatype's own out_folder.
+    # Same stale prior-run cleanup as aggregation_tile.py's own elevation
+    # path, scoped to the lineage datatype's own generation-scoped
+    # out_folder (see the audit comment there -- same reasoning).
     for stale_filepath in glob(f'{out_folder}/{z}-{x}-{y}-*.pmtiles'):
         if stale_filepath != out_filepath:
             os.remove(stale_filepath)
