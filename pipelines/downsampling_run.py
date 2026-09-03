@@ -1,10 +1,26 @@
+import os
+
+# 1.5-go pre-launch hardening, F1 (independent grading, 2026-09-04): this
+# script runs utils.create_archive() -> pmtiles.writer.Writer once per
+# downsampling item -- 8,223 items x 2 datatypes at national scale -- and
+# had no TMPDIR override at all, unlike every other script that touches a
+# Writer (aggregation_run.py, bundle.py, merge_japan_bundles.py,
+# bundle_1go_rebuild.py). Under non-interactive SSH this silently lands
+# scratch on the 228GB boot volume. Not likely to ENOSPC per-item (small
+# scratch), but orphan accumulation from killed/crashed workers over a
+# 50-70h run is exactly the mechanism that corrupted a 310GB archive in
+# D115. Set before any other import, same pattern as the other scripts.
+os.environ['TMPDIR'] = os.path.abspath('tmp-store/writer-scratch/')
+os.makedirs(os.environ['TMPDIR'], exist_ok=True)
+import tempfile
+tempfile.tempdir = None
+
 from collections import OrderedDict
 from glob import glob
 import io
 from multiprocessing import Pool
 import shutil
 from datetime import datetime
-import os
 import sys
 import argparse
 
