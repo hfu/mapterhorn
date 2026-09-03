@@ -1,8 +1,25 @@
+import os
+
+# D116-launch pre-flight (2026-09-04): this script runs for many hours
+# across thousands of items, each ending in utils.create_archive() ->
+# pmtiles.writer.Writer, which buffers via tempfile.TemporaryFile() with
+# no path argument -- lands on tempfile.gettempdir() unless TMPDIR is
+# force-set first (D104/D105's finding; previously fixed only in
+# bundle_1go_rebuild.py/merge_japan_bundles.py, not here). Each item's
+# own scratch is small, but thousands of iterations over many hours raise
+# the odds of an interrupted run leaving an orphaned scratch file on the
+# small boot volume -- exactly the incident class that corrupted a 310GB
+# archive earlier tonight. Set before any other import, same pattern as
+# the other two scripts.
+os.environ['TMPDIR'] = os.path.abspath('tmp-store/writer-scratch/')
+os.makedirs(os.environ['TMPDIR'], exist_ok=True)
+import tempfile
+tempfile.tempdir = None
+
 from glob import glob
 import json
 import random
 import shutil
-import os
 from multiprocessing import Pool
 
 import aggregation_reproject
