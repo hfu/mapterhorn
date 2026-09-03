@@ -78,7 +78,17 @@ def write_downsampling_items():
     command = f'rm aggregation-store/{aggregation_id}/*-downsampling.csv'
     utils.run_command(command)
 
-    for child_zoom in reversed(range(1, 32)):
+    # min_output_zoom=8 (2026-08-30, Hidenori's design): our own aggregation
+    # coverage has real, structural no-data gaps in deep-ocean areas far from
+    # any Japan coastline -- harmless at z8+ (nobody navigates deep ocean at
+    # that zoom) but visually obvious at the zoomed-out z0-7 views. Rather
+    # than patch our own z0-7 pyramid, splice in tiles.mapterhorn.com's own
+    # mature global product for z0-7 wholesale (via pmtiles merge, disjoint
+    # archives since z7's max tile_id < z8's min tile_id) and stop our own
+    # downsampling at z8. child_zoom=9 is the last iteration that still
+    # produces a real output (parent_zoom = child_zoom - 1 = 8).
+    min_output_zoom = 8
+    for child_zoom in reversed(range(min_output_zoom + 1, 32)):
         print(f'\nchild_zoom={child_zoom}')
         print('get extents...')
         extents = get_extents_from_coverings(aggregation_id, child_zoom)
