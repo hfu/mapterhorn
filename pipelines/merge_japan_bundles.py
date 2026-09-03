@@ -5,6 +5,7 @@
 # coverage grows past Hokkaido. Committed to this fork (2026-08-09,
 # `5609479` on the mapterhorn-japan-bridge side) -- an earlier version of
 # this comment said otherwise; that was true only before that commit.
+import json
 from glob import glob
 import os
 
@@ -60,6 +61,48 @@ INPUTS = sorted(
 )
 
 
+def assert_inputs_complete():
+    """D117/D119: this script deletes each INPUTS file as it consumes it
+    (see the os.remove(path) comment below), so a run interrupted partway
+    through (e.g. the 2026-09-02 ENOSPC crash) leaves a PARTIAL bundle-store
+    on disk, and a naive re-run's glob silently treats that partial set as
+    complete -- exactly what happened on 9/2, publishing 14 of 23 regional
+    bundles with all of western Japan's z13+ missing, undetected until
+    D117's investigation. bundle*.py's own meta-store/bundle/*.json (one
+    file per region, written by that script only after the region's build
+    succeeds) is the authoritative "what should be here" list -- use it as
+    a completeness gate before merging anything.
+    """
+    manifest_dir = 'meta-store/bundle'
+    expected = {}
+    for meta_path in sorted(glob(f'{manifest_dir}/*.json')):
+        name = os.path.basename(meta_path)[:-len('.json')]
+        is_lineage_manifest = name.endswith('-lineage')
+        if is_lineage_manifest != (MERGE_DATATYPE == 'lineage'):
+            continue
+        with open(meta_path) as mf:
+            expected[f'bundle-store/{name}.pmtiles'] = json.load(mf)
+
+    missing = sorted(p for p in expected if not os.path.isfile(p))
+    wrong_size = sorted(
+        (p, expected[p]['size'], os.path.getsize(p)) for p in expected
+        if p not in missing and os.path.getsize(p) != expected[p]['size']
+    )
+    extra = sorted(set(INPUTS) - set(expected))
+
+    if missing or wrong_size or extra:
+        raise SystemExit(
+            'REFUSING TO MERGE -- bundle-store is not the complete, current '
+            'set of regional bundles (see mapterhorn-japan-bridge '
+            'DECISIONS.md D117/D119).\n'
+            f'  missing ({len(missing)}): {missing}\n'
+            f'  size mismatch ({len(wrong_size)}): {wrong_size}\n'
+            f'  present but not in {manifest_dir}/ ({len(extra)}): {extra}'
+        )
+    total_gib = sum(v['size'] for v in expected.values()) / 2**30
+    print(f'completeness check OK: {len(expected)} bundle(s), {total_gib:.1f} GiB')
+
+
 def FileSource(f):
     """Seek+read in place of pmtiles.reader.MmapSource. MmapSource maps the
     whole file and never calls madvise() to release pages it's already
@@ -82,6 +125,7 @@ def FileSource(f):
 
 
 def main():
+    assert_inputs_complete()
     print(f'merging {len(INPUTS)} file(s): {INPUTS}')
     min_lon, min_lat, max_lon, max_lat = 180.0, 90.0, -180.0, -90.0
     total = 0
