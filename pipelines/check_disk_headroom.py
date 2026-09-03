@@ -18,7 +18,12 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-VOLUME = '/Volumes/Migrate-2025-04'
+# 1.5-go launch pre-flight (2026-09-04): extended to cover pmtiles-store
+# as well as Migrate-2025-04 -- the 1.5-go national run writes the bulk of
+# its output there (leaf + pyramid pmtiles), and the original single-volume
+# version would have stayed silent through exactly the kind of headroom
+# exhaustion this script exists to catch.
+VOLUMES = ['/Volumes/Migrate-2025-04', '/Volumes/pmtiles-store']
 LOG_PATH = Path(__file__).resolve().parent.parent / 'disk_headroom.log'
 
 
@@ -28,21 +33,25 @@ def main():
     parser.add_argument('--critical-gb', type=float, default=80)
     args = parser.parse_args()
 
-    usage = shutil.disk_usage(VOLUME)
-    free_gb = usage.free / 1e9
-    total_gb = usage.total / 1e9
     now = datetime.now().isoformat(timespec='seconds')
+    lines = []
+    for volume in VOLUMES:
+        usage = shutil.disk_usage(volume)
+        free_gb = usage.free / 1e9
+        total_gb = usage.total / 1e9
 
-    level = 'ok'
-    if free_gb < args.critical_gb:
-        level = 'CRITICAL'
-    elif free_gb < args.warn_gb:
-        level = 'WARNING'
+        level = 'ok'
+        if free_gb < args.critical_gb:
+            level = 'CRITICAL'
+        elif free_gb < args.warn_gb:
+            level = 'WARNING'
 
-    line = f'{now}  free={free_gb:.1f}GB  total={total_gb:.1f}GB  {level}'
-    print(line)
+        lines.append(f'{now}  {volume}  free={free_gb:.1f}GB  total={total_gb:.1f}GB  {level}')
+
     with open(LOG_PATH, 'a') as f:
-        f.write(line + '\n')
+        for line in lines:
+            print(line)
+            f.write(line + '\n')
 
 
 if __name__ == '__main__':
