@@ -14,6 +14,8 @@ from pmtiles.reader import Reader, all_tiles
 from pmtiles.tile import TileType, Compression, zxy_to_tileid
 from pmtiles.writer import Writer
 
+from utils import run_command
+
 # D104/D105 (mapterhorn-japan-bridge DECISIONS.md): the pmtiles library's
 # Writer buffers tile bytes via tempfile.TemporaryFile() with no path
 # argument, so it lands on tempfile.gettempdir() -- which honors TMPDIR,
@@ -189,6 +191,23 @@ def main():
             },
         )
     print(f'wrote {OUTPUT}, {total:_} tiles total')
+
+    # D140/D143: cluster every datatype's output here, unconditionally, so
+    # it's a property of this script rather than a runbook step someone
+    # has to remember per datatype. Originally only elevation's z8plus was
+    # clustered by hand (D127) on the assumption lineage's small size made
+    # it not worth the trouble -- measuring it instead (D143) found
+    # lineage dedupes far MORE than elevation (~83.5% duplicate tile
+    # content vs ~19%, since its categorical single-band values produce
+    # huge byte-identical regions like contiguous sea), at a ~3.4s cost.
+    # No datatype has a reason to skip this. For elevation this clusters
+    # the .z8plus intermediate before pmtiles_merge.py's global-overview
+    # splice (the splice output already inherits clustered ordering, per
+    # D141's observation); for lineage, whose output here is already the
+    # final publishable file (see the OUTPUT naming comment above), this
+    # is the last step before publish.
+    print(f'clustering {OUTPUT}...')
+    run_command(f'./pmtiles cluster {OUTPUT}', silent=False)
 
 if __name__ == '__main__':
     main()
