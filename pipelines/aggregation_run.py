@@ -45,16 +45,18 @@ def get_worker_count():
                 return value
         except ValueError:
             pass
-    # Default: 5 workers. Raised from 4 (mapterhorn-japan-bridge DECISIONS.md
-    # D84, 2026-09-01) -- the original 4 assumed aggregation_run.py sharing
-    # the machine with a concurrent downsampling_run.py pass and a single
-    # pmtiles-store disk; neither holds today (pmtiles-store is now split
-    # across two disks since D58/D61, and aggregation_repair_3344 runs
-    # alone). CPU measured ~46-47% idle at 4 workers (10 logical cores,
-    # 4P+6E), so raising this by one worker at a time and measuring the
-    # actual items/15min pace, rather than jumping straight to a number
-    # that assumes full utilization is safe.
-    return 5
+    # Default: 3 workers (mapterhorn-japan-bridge DECISIONS.md D129/D130/D131,
+    # 2026-09-05). D84's 5-worker default (2026-09-01) was tuned for CPU idle
+    # time only and didn't account for per-worker memory spikes on dense
+    # source tiles -- 5 concurrent workers on this machine's 16GB RAM ran for
+    # ~12.5h before exhausting the memory compressor's segment limit and
+    # triggering a kernel panic (D129). Reducing to 3 costs ~20-23% throughput
+    # (measured: 4.03->3.10 items/min) but has run crash-free for 12.5h+ since
+    # (as of D130's analysis) with no memory-pressure incidents. Hidenori's
+    # decision (D131): fix 3 workers for both the remainder of 1.5-go and for
+    # 2-go -- accept the throughput cost in exchange for eliminating the
+    # crash risk, rather than soak-testing 4 workers as D130 had left open.
+    return 3
 
 def emit_lineage(filepath, tmp_folder):
     """D93/D94/D96/D107: compute and tile the provenance raster. Must run
