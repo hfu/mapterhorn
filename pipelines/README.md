@@ -135,6 +135,18 @@ We store the PMTiles data in the pmtiles-store folder using the same filename co
 
 If the aggregation item has z &lt; 7, it is stored directly in the pmtiles-store folder. Else it is placed in a subfolder where the subfolder name is given by the zoom 7 parent of the aggregation item. Example: `pmtiles-store/7-67-44/12-2144-1434-17.pmtiles`
 
+> **Fork note (2026-09)**: for the Japan bridge project, `pmtiles-store/`'s
+> layout above is nested one level deeper —
+> `pmtiles-store/{layer}/{datatype}/{generation_id}/{z7bucket}/...`, where
+> `layer` is `aggregation` or `downsampling` and `datatype` is `elevation`
+> or `lineage` (a per-pixel "which source tier won" category layer, see
+> `FORK_NOTES.md` section D). `utils.get_pmtiles_folder()` now requires
+> `layer`/`datatype`/`generation_id` arguments rather than resolving from
+> `x`/`y`/`z` alone — this closes a class of cross-generation file
+> collisions (see `hfu/mapterhorn-japan-bridge` `DECISIONS.md` D74-D76,
+> D95, D107, D124) but means the flat layout described just above no
+> longer applies once a caller passes a real `generation_id`.
+
 The `pmtiles-store/` can point to a folder on a HDD since access is sequential.
 
 ## Downsampling
@@ -163,6 +175,13 @@ First we create a map from child tile id to pmtiles file by expanding the childr
 **Geographic Clustering**: Parent tiles sorted by geographic proximity (x, y coordinates) to improve L3 cache hit rates and OS disk I/O optimization. Expected improvement: 15-20%.
 
 **Geographic Proximity-Based Priority**: Processing order prioritizes high-zoom tiles near a configurable geographic center (default: Freetown, 8.465°N, 13.234°W). Override via `CENTER_LAT`, `CENTER_LON` environment variables. Ensures high-value imagery completes first.
+
+> **Fork note (2026-09)**: a second `PRIORITY_MODE` (`proximity` default,
+> `quadrans`) governs which of these two orderings is used. The Japan
+> bridge project runs with `PRIORITY_MODE=quadrans`, which sorts by
+> `utils.japan_quadrans_of()`'s North/South/East/West quadrant instead of
+> distance from `CENTER_LAT`/`CENTER_LON` — order only, no effect on the
+> result, but `CENTER_LAT`/`CENTER_LON` are simply ignored in this mode.
 
 **PMTiles Validation & Auto-Repair**: Built-in validation to detect incomplete/corrupted PMTiles files. Automatic repair removes broken files and marks for regeneration.
 

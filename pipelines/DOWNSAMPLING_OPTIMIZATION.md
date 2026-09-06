@@ -1,7 +1,56 @@
 # Downsampling Optimization Report
 
 **Date**: 2026-07-12  
-**Status**: 🚀 In Production
+**Status**: 🚀 In Production (Freetown deployment; see 2026-09 update below for
+what changed for the Japan bridge project)
+
+## 2026-09 update (Japan bridge project, `mapterhorn-japan-bridge` DECISIONS.md D93-D146)
+
+The report below is a snapshot from the original Freetown deployment and is
+kept as-is for that history. Running this same `downsampling_run.py` for
+`hfu/mapterhorn-japan-bridge` since added several things this report
+predates:
+
+- **`pmtiles-store` now requires `generation_id`** (plus `layer`/`datatype`)
+  — the flat `pmtiles-store/{z-x-y}/{z-x-y}-{child_z}.pmtiles` layout this
+  report's "File Organization" section shows is specific to a single,
+  never-restructured generation. See `FORK_NOTES.md` section D and
+  `pipelines/README.md`'s fork note on `get_pmtiles_folder()`.
+- **`DOWNSAMPLING_DATATYPE`** (`elevation` default, `lineage`) — a second,
+  categorical tile type (per-pixel "which source tier won"), downsampled by
+  majority vote instead of the 2×2 averaging this report describes. Building
+  both means running `downsampling_run.py` twice, once per datatype.
+- **`DOWNSAMPLING_STRICT`** (`0` off / `1` on, not mentioned below) — when
+  on, an item with any missing child tile is skipped entirely (no `.done`,
+  retried next run) instead of building from whatever children exist. Japan
+  bridge production runs set this to `1`.
+- **`PRIORITY_MODE=quadrans`** — an alternative to this report's
+  Freetown-centered `CENTER_LAT`/`CENTER_LON` proximity sort, ordering by
+  `utils.japan_quadrans_of()`'s North/South/East/West quadrant instead.
+  Order only, no effect on the result; Japan bridge runs use this mode, so
+  `CENTER_LAT`/`CENTER_LON` are not in effect there.
+- **`.done` markers are no longer empty touch files** — since D124 they are
+  `mjb-done-manifest/1` JSON, scoped per datatype and fingerprinted against
+  their inputs, so a repaired child correctly invalidates the overviews
+  built from it. The "Remove `.done` markers to restart" troubleshooting tip
+  below still works mechanically (delete-and-reprocess), but treat any
+  `.done`'s mere *existence* as "once succeeded", not "still valid" — see
+  `mapterhorn-japan-bridge`'s `PIPELINE_DESIGN.md` §6.
+- **The PMTiles validation/auto-repair feature below is not generation-aware
+  — use with care.** `check_and_fix_pmtiles()`'s default `glob('**/*.pmtiles')`
+  against `pmtiles-store` crosses every generation, layer, and datatype at
+  once, which is exactly the class of cross-generation mixup that caused a
+  real data-loss incident on this project (`mapterhorn-japan-bridge`
+  DECISIONS.md D74-D76). Confirmed still unscoped as of 2026-09-06 — do not
+  run `--fix` against a `pmtiles-store` holding more than one generation
+  without scoping it first.
+- **`min_output_zoom=8`**: the zoom pyramid downsampling builds now stops at
+  z8 by design (not z0) for `elevation`, because Japan bridge's own z0-7 has
+  structural deep-ocean gaps meant to be filled by splicing in upstream
+  Mapterhorn's own global z0-7 tiles instead. `lineage` has no such external
+  z0-7 counterpart to splice in, so a separate one-off script
+  (`lineage_extend_low_zoom.py`, D146) extends *only* lineage's pyramid down
+  to z4 without touching this script or its covering step.
 
 ## Overview
 
