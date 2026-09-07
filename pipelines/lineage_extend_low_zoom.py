@@ -115,12 +115,29 @@ def build_level(source_output_zoom, source_tiles=None):
     print(f'building z{target_zoom} from z{source_output_zoom}...')
 
     if source_tiles is None:
-        pattern = f'{FOLDER}/*-{source_output_zoom}.pmtiles'
-        filenames = sorted(os.path.basename(f) for f in glob.glob(pattern))
-        if not filenames:
+        # Recursive: utils.get_pmtiles_folder() buckets any extent tile with
+        # z>=7 into a nested {FOLDER}/{z7bucket}/ subdirectory, so the real
+        # z8 archives are NOT all sitting flat in FOLDER -- a non-recursive
+        # glob here found only 14 of 107 real archives on the published
+        # 1.5-go generation (13%), silently building the z4-z7 overview from
+        # a small, geographically arbitrary slice of the country. See
+        # bundle.py's own get_parent_to_filepaths(), which globs both
+        # `*.pmtiles` and `*/*.pmtiles` for exactly this reason.
+        pattern = f'{FOLDER}/**/*-{source_output_zoom}.pmtiles'
+        matched_paths = glob.glob(pattern, recursive=True)
+        if not matched_paths:
             raise RuntimeError(f'no input files matched {pattern}')
+        # get_tile_to_pmtiles_filename() parses each entry as a bare
+        # `{z}-{x}-{y}-{child_zoom}.pmtiles` basename (int-splits on '-'),
+        # so it cannot take a subfolder-qualified path directly -- feed it
+        # basenames, then translate its result back to the real path
+        # (relative to FOLDER, so a flat file's "path" is just its own
+        # basename, unchanged) for actually opening the archive later.
+        basename_to_relpath = {os.path.basename(p): os.path.relpath(p, FOLDER) for p in matched_paths}
+        filenames = sorted(basename_to_relpath.keys())
         print(f'  {len(filenames)} source archive(s): {filenames[:5]}{"..." if len(filenames) > 5 else ""}')
-        tile_to_filename = downsampling_run.get_tile_to_pmtiles_filename(filenames)
+        tile_to_basename = downsampling_run.get_tile_to_pmtiles_filename(filenames)
+        tile_to_filename = {t: basename_to_relpath[fn] for t, fn in tile_to_basename.items()}
         source_tiles = [t for t in tile_to_filename if t.z == source_output_zoom]
         assert_tiles_sane(source_tiles, f'source tiles at z{source_output_zoom}')
     else:
