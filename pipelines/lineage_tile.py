@@ -41,6 +41,7 @@ def create_lineage_tiles(tmp_folder, aggregation_tile, category_data, buffer_pix
         for j, y in enumerate(range(y_min, y_min + 2 ** (z - base_z))):
             out_filepath = f'{tmp_folder}/{z}-{x}-{y}.webp'
             create_lineage_tile(i, j, category_data, out_filepath, buffer_pixels)
+    return child_z
 
 
 def create_lineage_tile(i, j, category_data, out_filepath, buffer_pixels):
@@ -69,14 +70,23 @@ def main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder, aggregation
     named identically ({z}-{x}-{y}.webp) into the same tmp_folder later in
     run(), and utils.create_archive() globs `*.webp` unconditionally, so
     sharing a directory would let one datatype's blocks silently clobber
-    or bundle into the other's archive."""
+    or bundle into the other's archive.
+
+    The `child_z` parameter is the caller's *planned* value (parsed from
+    the aggregation covering filename, aggregation_run.py's emit_lineage())
+    -- used only to build `aggregation_tile`'s base position, not the
+    output filename. create_lineage_tiles() below derives the REAL child_z
+    from category_data's own shape and is what actually names the archive
+    (mirrors aggregation_tile.py's main(), D149/D150: covering's planned
+    zoom and the actually-produced zoom can differ once upsampling exists)."""
     blocks_folder = f'{tmp_folder}/lineage-blocks'
     utils.create_folder(blocks_folder)
 
     aggregation_tile = mercantile.Tile(x=x, y=y, z=z)
     out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype='lineage', generation_id=aggregation_id)
     utils.create_folder(out_folder)
-    out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
+    real_child_z = create_lineage_tiles(blocks_folder, aggregation_tile, category_data, buffer_pixels)
+    out_filepath = f'{out_folder}/{z}-{x}-{y}-{real_child_z}.pmtiles'
     # Same stale prior-run cleanup as aggregation_tile.py's own elevation
     # path, scoped to the lineage datatype's own generation-scoped
     # out_folder (see the audit comment there -- same reasoning).
@@ -84,5 +94,4 @@ def main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder, aggregation
         if stale_filepath != out_filepath:
             os.remove(stale_filepath)
 
-    create_lineage_tiles(blocks_folder, aggregation_tile, category_data, buffer_pixels)
     utils.create_archive(blocks_folder, out_filepath)

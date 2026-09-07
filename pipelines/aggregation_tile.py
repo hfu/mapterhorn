@@ -38,6 +38,7 @@ def create_tiles(tmp_folder, aggregation_tile, tiff_filepath, buffer_pixels):
         for j, y in enumerate(range(y_min, y_min + 2 ** (z - base_z))):
             out_filepath = f'{tmp_folder}/{z}-{x}-{y}.webp'
             create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels)
+    return child_z
 
 def create_tile(i, j, tiff_filepath, out_filepath, buffer_pixels):
     col_start = i * 512 + buffer_pixels
@@ -79,8 +80,16 @@ def main(filepath, tmp_folder):
     # item (and therefore its pmtiles-store output) belongs to.
     aggregation_id = filepath.split('/')[-2]
 
-    z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
-
+    # The filename's own child_z is covering's *planned* maxzoom for this
+    # item, not necessarily what actually ends up on disk -- D149/D150's
+    # "1.6-go" rehearsal upsamples some items to a deeper target zoom than
+    # their native source resolution, and create_tiles() below derives the
+    # REAL child_z from the reprojected raster's own pixel dimensions.
+    # Trusting the filename's value here (as this code did until D150)
+    # produces an archive whose name and contents disagree -- harmless
+    # today (native runs always compute the same value either way) but
+    # actively wrong once upsampling exists.
+    z, x, y, _planned_child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
 
     pmtiles_done_filepath = f'{tmp_folder}/pmtiles-done'
     if os.path.isfile(pmtiles_done_filepath):
@@ -102,6 +111,7 @@ def main(filepath, tmp_folder):
     aggregation_tile = mercantile.Tile(x=x, y=y, z=z)
     out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', generation_id=aggregation_id)
     utils.create_folder(out_folder)
+    child_z = create_tiles(tmp_folder, aggregation_tile, tiff_filepath, buffer_pixels)
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
     # Remove stale prior-RUN output at this exact macrotile position (same
     # z-x-y, different child_z -- a position's maxzoom can change when its
@@ -123,6 +133,5 @@ def main(filepath, tmp_folder):
     for stale_filepath in glob(f'{out_folder}/{z}-{x}-{y}-*.pmtiles'):
         if stale_filepath != out_filepath:
             os.remove(stale_filepath)
-    create_tiles(tmp_folder, aggregation_tile, tiff_filepath, buffer_pixels)
     utils.create_archive(tmp_folder, out_filepath)
     utils.run_command(f'touch {pmtiles_done_filepath}')
