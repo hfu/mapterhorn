@@ -409,6 +409,15 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
         avg_elevation = np.where(weight_sum > 0, avg_elevation, 0)
         avg_alpha = np.round(weight_sum / 4.0 * 255.0).astype(np.uint8)
 
+        # Upstream mapterhorn/mapterhorn commit 53e4d3d ("Fix rounding on
+        # downsampling bug", #308, Oliver Wipfli, 2026-09-05): this function
+        # otherwise mirrors upstream's own create_tile(), but upstream's
+        # pre-fix version it was ported from skipped quantizing the parent
+        # tile's own vertical resolution after averaging -- unrounded float
+        # noise with no informational gain (the averaged inputs were already
+        # quantized at the finer child zoom), just extra WebP entropy.
+        avg_elevation = utils.get_rounded_elevation_data(avg_elevation, parent_z)
+
         data = avg_elevation + 32768.0
         parent_rgba = np.zeros((512, 512, 4), dtype=np.uint8)
         parent_rgba[..., 0] = data // 256

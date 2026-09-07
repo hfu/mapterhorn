@@ -82,6 +82,26 @@ def get_aggregation_ids():
 def get_vertical_rounding_multiplier(z):
     return int(2 ** ((10 - z) / 2) / (1 / 256))
 
+def get_rounded_elevation_data(data, z):
+    """Quantize elevation to Terrarium's own per-zoom vertical resolution.
+    Ported from upstream mapterhorn/mapterhorn commit 53e4d3d ("Fix
+    rounding on downsampling bug", #308, Oliver Wipfli, 2026-09-05):
+    save_terrarium_tile() below always rounded its input this way, but
+    downsampling_run.py's create_tile() -- forked away from upstream
+    before that fix (FORK_NOTES.md section, downsampling_run.py entry)
+    -- never rounded its own 2x2/4x4-averaged output, leaving float noise
+    baked into every overview tile's RGB encoding. That noise carries no
+    real information (the averaged input was already quantized at the
+    finer child zoom) and measurably hurts WebP compression. Extracted
+    here so both callers share one definition."""
+    # full terrarium resolution of 1/256 at `full_resolution_zoom`
+    # multiples of 2 of full terrarium resolution at lower zooms
+    full_resolution_zoom = 19
+    factor = 2 ** (full_resolution_zoom - z) / 256
+    if factor > 32:
+        factor = 32
+    return np.round(data / factor) * factor
+
 def save_terrarium_tile(data, filepath, valid_mask=None):
     """`valid_mask` (bool array, same shape as `data`, True = real data) is
     encoded as an alpha channel so gaps (no source coverage at all -- not
@@ -93,11 +113,7 @@ def save_terrarium_tile(data, filepath, valid_mask=None):
     filename = filepath.split('/')[-1]
     z = int(filename.split('-')[0])
 
-    # full terrarium resolution of 1/256 at `full_resolution_zoom`
-    # multiples of 2 of full terrarium resolution at lower zooms
-    full_resolution_zoom = 19
-    factor = 2 ** (full_resolution_zoom - z) / 256
-    data = np.round(data / factor) * factor
+    data = get_rounded_elevation_data(data, z)
 
     data += 32768
     rgba = np.zeros((512, 512, 4), dtype=np.uint8)
