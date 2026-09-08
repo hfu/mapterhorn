@@ -98,6 +98,15 @@ def get_rounded_elevation_data(data, z):
     # multiples of 2 of full terrarium resolution at lower zooms
     full_resolution_zoom = 19
     factor = 2 ** (full_resolution_zoom - z) / 256
+    # Without this cap, factor grows to unreasonable multi-hundred/
+    # -thousand-meter steps at low zoom (2048m at z0) -- quantizing real
+    # elevation to that coarse a grid would destroy far more than the
+    # "already lost at the finer child zoom" noise this function exists to
+    # clean up. This cap (and its specific value, 32m) is ported as-is from
+    # upstream's own commit 53e4d3d -- present there unexplained too, not
+    # independently re-derived or justified here; verified present in
+    # upstream's original diff when this function was ported
+    # (mapterhorn-japan-bridge DECISIONS.md D148).
     if factor > 32:
         factor = 32
     return np.round(data / factor) * factor

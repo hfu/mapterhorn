@@ -289,7 +289,26 @@ def sort_files_by_proximity(filepaths, center_lat=CENTER_LAT, center_lon=CENTER_
 # already did before this cache existed); the pipeline's own filename
 # convention (a changed maxzoom suffix, never a same-path overwrite, D37)
 # means a stale cache entry's path is never silently reoccupied by
-# different content, so no extra staleness check is needed here.
+# different content, so no extra staleness check is needed here -- for
+# THIS module's own callers.
+#
+# This invariant does NOT hold for every caller of get_cached_reader() in
+# the codebase: lineage_extend_low_zoom.py (D146) reads back its own
+# `0-0-0-{zoom}.pmtiles` outputs through this same function, and that
+# script deliberately reuses a FIXED filename per zoom level across runs
+# (no content-dependent suffix) -- exactly the same-path-different-
+# content case this cache would serve stale, if a long-lived process
+# ever read one of those paths, the underlying file got rewritten (e.g. a
+# re-run for a bugfix, D152), and the same process then read that path
+# again. It happens not to matter there today only because that script is
+# a short-lived, single-process, run-once-per-invocation tool that never
+# reads a given path twice within one run after a rewrite -- not because
+# this cache is safe for it in general. Any future caller that is
+# long-lived (a Pool worker, a persistent service) AND reads a fixed,
+# reused filename must not rely on this cache's freshness without adding
+# its own check (e.g. stat() the file and compare mtime/inode before
+# trusting a cache hit) -- don't assume this comment's original guarantee
+# extends to you just because the function is shared.
 _READER_CACHE_MAXSIZE = 16
 _reader_cache = OrderedDict()
 
@@ -368,15 +387,7 @@ def create_tile(parent_x, parent_y, parent_z, aggregation_id, tmp_folder, pmtile
         # downsample() wants those as two separate (1024,1024) arrays.
         values = full_data[..., 0].astype(np.int64)
         alpha = full_data[..., 3]
-        parent_values, parent_alpha = lineage_downsample.majority_vote_downsample(values, alpha)
-        parent_category = np.where(
-            parent_values == lineage_downsample.NODATA, 255, parent_values
-        ).astype(np.uint8)
-        parent_valid_mask = parent_alpha > 0
-        parent_rgba = np.zeros((512, 512, 4), dtype=np.uint8)
-        parent_rgba[..., 0] = parent_category
-        parent_rgba[..., 3] = np.where(parent_valid_mask, 255, 0).astype(np.uint8)
-        parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=True)
+        parent_bytes, _parent_alpha = lineage_downsample.build_parent_tile_bytes(values, alpha)
     elif TILE_ENCODING == 'terrarium':
         # Matches upstream mapterhorn/mapterhorn's own downsampling exactly
         # (decode each child to real elevation, average the elevations, then

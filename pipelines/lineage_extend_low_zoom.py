@@ -28,10 +28,11 @@ elevation scale buys nothing here.
 """
 import glob
 import io
+import json
 import os
 import shutil
+from datetime import datetime, timezone
 
-import imagecodecs
 import mercantile
 import numpy as np
 from PIL import Image
@@ -154,6 +155,8 @@ def build_level(source_output_zoom, source_tiles=None):
     tmp_folder = f'tmp-store/lineage-extend-{target_zoom}'
     utils.create_folder(tmp_folder)
 
+    written_parents = []
+    empty_parents = 0
     for parent in parents:
         full_values = np.full((1024, 1024), lineage_downsample.NODATA, dtype=np.int64)
         full_alpha = np.zeros((1024, 1024), dtype=np.float32)
@@ -172,28 +175,59 @@ def build_level(source_output_zoom, source_tiles=None):
                 full_values[row_start:row_end, col_start:col_end] = child_rgba[..., 0].astype(np.int64)
                 full_alpha[row_start:row_end, col_start:col_end] = child_rgba[..., 3].astype(np.float32)
 
-        parent_values, parent_alpha = lineage_downsample.majority_vote_downsample(full_values, full_alpha)
-        parent_category = np.where(
-            parent_values == lineage_downsample.NODATA, 255, parent_values
-        ).astype(np.uint8)
-        parent_rgba = np.zeros((512, 512, 4), dtype=np.uint8)
-        parent_rgba[..., 0] = parent_category
-        parent_rgba[..., 3] = parent_alpha
-        parent_bytes = imagecodecs.webp_encode(parent_rgba, lossless=True)
+        parent_bytes, parent_alpha = lineage_downsample.build_parent_tile_bytes(full_values, full_alpha)
+        # A parent whose 2x2 block was entirely nodata (all four children
+        # missing/empty) encodes to an all-transparent tile that carries no
+        # information -- skip writing it, and don't feed it forward as a
+        # "real" tile for the next (even lower) zoom level. Left in, it
+        # wouldn't corrupt anything (majority_vote_downsample's own alpha
+        # gate would just keep treating it as nodata downstream too), but
+        # it would waste an encode+write here and get needlessly
+        # re-discovered as a phantom source tile at every remaining level.
+        if not parent_alpha.any():
+            empty_parents += 1
+            continue
+        written_parents.append(parent)
         with open(f'{tmp_folder}/{parent.z}-{parent.x}-{parent.y}.webp', 'wb') as f:
             f.write(parent_bytes)
+
+    if empty_parents:
+        print(f'  skipped {empty_parents} all-nodata parent tile(s)')
 
     out_filepath = f'{FOLDER}/0-0-0-{target_zoom}.pmtiles'
     utils.create_archive(tmp_folder, out_filepath)
     shutil.rmtree(tmp_folder)
     print(f'  wrote {out_filepath}')
-    return target_zoom, parents
+    return target_zoom, written_parents
 
 
 if __name__ == '__main__':
     print(f'generation_id={GENERATION_ID}, folder={FOLDER}')
     current_zoom = SOURCE_ZOOM
     current_tiles = None
+    tile_counts_by_zoom = {}
     while current_zoom > TARGET_ZOOM:
         current_zoom, current_tiles = build_level(current_zoom, current_tiles)
+        tile_counts_by_zoom[current_zoom] = len(current_tiles)
+
+    # This script is standalone (see module docstring) and doesn't go
+    # through downsampling_run.py's own per-item `.done` manifest system
+    # (mjb-done-manifest/1) -- that system tracks coverage of thousands of
+    # individually-processed items and doesn't fit a single-shot, five-
+    # extent-tile script like this one. Still worth leaving SOME on-disk
+    # trace that this step ran for this generation_id, since
+    # CLAUDE.md's own standing caution against trusting absence-of-error
+    # as proof of correctness applies here too -- a future session
+    # re-checking this generation's lineage archive shouldn't have to
+    # guess whether the low-zoom extension ever ran from output state
+    # alone.
+    done_marker = {
+        'generation_id': GENERATION_ID,
+        'source_zoom': SOURCE_ZOOM,
+        'target_zoom': TARGET_ZOOM,
+        'tile_counts_by_zoom': tile_counts_by_zoom,
+        'completed_at': datetime.now(timezone.utc).isoformat(),
+    }
+    with open(f'{FOLDER}/lineage-extend-low-zoom.done', 'w') as f:
+        json.dump(done_marker, f, indent=1)
     print('done.')

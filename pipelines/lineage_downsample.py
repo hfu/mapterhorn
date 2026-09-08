@@ -42,6 +42,7 @@ average, behind a data-type switch (e.g. an EMIT_LINEAGE-style flag per
 D93), on the lineage raster's own 1024x1024 category+alpha block instead of
 the elevation RGBA block.
 """
+import imagecodecs
 import numpy as np
 
 # 0..6 = GLOBAL_TIER from lineage_inspect.py (0 = highest priority source,
@@ -91,6 +92,21 @@ def majority_vote_downsample(values, alpha, num_categories=NUM_CATEGORIES):
     parent_values = np.where(any_valid, winning_category, NODATA).astype(np.int8)
     parent_alpha = np.where(any_valid, 255, 0).astype(np.uint8)
     return parent_values, parent_alpha
+
+
+def build_parent_tile_bytes(full_values, full_alpha):
+    """majority_vote_downsample() plus the category/alpha -> lossless WebP
+    encoding both real callers need afterward (downsampling_run.py's
+    create_tile() lineage branch, and lineage_extend_low_zoom.py's
+    build_level()) -- extracted here so the NODATA<->255 sentinel mapping
+    and encoding convention live in exactly one place rather than two
+    independently-maintained copies."""
+    parent_values, parent_alpha = majority_vote_downsample(full_values, full_alpha)
+    parent_category = np.where(parent_values == NODATA, 255, parent_values).astype(np.uint8)
+    parent_rgba = np.zeros((512, 512, 4), dtype=np.uint8)
+    parent_rgba[..., 0] = parent_category
+    parent_rgba[..., 3] = parent_alpha
+    return imagecodecs.webp_encode(parent_rgba, lossless=True), parent_alpha
 
 
 def _self_test():
