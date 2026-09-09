@@ -102,13 +102,15 @@ def get_rounded_elevation_data(data, z):
     # -thousand-meter steps at low zoom (2048m at z0) -- quantizing real
     # elevation to that coarse a grid would destroy far more than the
     # "already lost at the finer child zoom" noise this function exists to
-    # clean up. This cap (and its specific value, 32m) is ported as-is from
-    # upstream's own commit 53e4d3d -- present there unexplained too, not
-    # independently re-derived or justified here; verified present in
-    # upstream's original diff when this function was ported
-    # (mapterhorn-japan-bridge DECISIONS.md D148).
-    if factor > 32:
-        factor = 32
+    # clean up. Ported as-is from upstream mapterhorn/mapterhorn, matching
+    # its own cap value at each point in time: originally 32 (commit
+    # 53e4d3d, D148), tightened to 1 (commit e964a04, "Clamp vertical
+    # rounding to 1 meter", #310, Oliver Wipfli, 2026-09-08 -- Oliver's own
+    # follow-up after shipping 53e4d3d, on finding 32m was too aggressive)
+    # -- see mapterhorn-japan-bridge DECISIONS.md D155 for the follow-up
+    # port and its measured impact.
+    if factor > 1:
+        factor = 1
     return np.round(data / factor) * factor
 
 def save_terrarium_tile(data, filepath, valid_mask=None):
