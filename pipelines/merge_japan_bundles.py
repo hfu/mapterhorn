@@ -51,6 +51,45 @@ if MERGE_DATATYPE == 'lineage':
     OUTPUT = 'bundle-store/mapterhorn-japan-bridge-lineage.pmtiles'
 else:
     OUTPUT = 'bundle-store/mapterhorn-japan-bridge.z8plus.pmtiles'
+
+# Catalog metadata, written at generation time rather than patched in
+# afterward (stars' request, 2026-09-11 -- `pmtiles edit` rewrites the whole
+# file, which is an unacceptable risk to run against a 258GB published
+# archive; at 204MB the lineage one is harmless either way, but keeping both
+# in one place beats having two different mechanisms).
+#
+# For elevation this metadata survives the later `./pmtiles merge` splice:
+# that command copies center and JSON metadata from its FIRST input, which is
+# this script's own z8plus output (confirmed in the splice's own log line,
+# "Copying center and JSON metadata from first input").
+#
+# `name` MUST differ from the Martin source id, or it silently disappears
+# from the catalog -- martin-core/src/tiles/source.rs filters the name with
+# `.filter(|v| *v != id)`, so a name of exactly "mapterhorn-japan-bridge"
+# renders as no name at all. Hence the "Mapterhorn Japan Bridge: ..." forms.
+# The lineage string matches what stars already had in place by hand, so the
+# catalog entry does not churn between publishes.
+_SHARED_DESCRIPTION_TAIL = (
+    'Interim bridge pending upstream Mapterhorn\'s own jpdem1a source '
+    'catching up to the same GSI survey updates. '
+    'https://hfu.github.io/mapterhorn-japan-bridge/'
+)
+if MERGE_DATATYPE == 'lineage':
+    ARCHIVE_NAME = 'Mapterhorn Japan Bridge: source lineage'
+    ARCHIVE_DESCRIPTION = (
+        'Per-pixel provenance for the Japan terrain bridge: which source tier '
+        '(GSI DEM 1m / 5m A-C / 10m A-B, or the global fallback) actually '
+        'filled each pixel of the companion terrain archive. Single-channel '
+        'category values, not elevation. ' + _SHARED_DESCRIPTION_TAIL
+    )
+else:
+    ARCHIVE_NAME = 'Mapterhorn Japan Bridge: nationwide terrain'
+    ARCHIVE_DESCRIPTION = (
+        'Nationwide Japan terrain (Mapterhorn-format PMTiles, Terrarium-'
+        'encoded), priority-merged per-pixel from GSI 基盤地図情報 DEM '
+        '(1m/5m/10m, six product tiers) with a global fallback. '
+        + _SHARED_DESCRIPTION_TAIL
+    )
 # Datatype-scoped: bundle-store holds both datatypes' regional archives
 # side by side (distinguished by BUNDLE_DATATYPE's own "-lineage" filename
 # suffix, D107) -- a naive glob would merge them together into one corrupt
@@ -188,6 +227,18 @@ def main():
             },
             {
                 'attribution': '国土地理院 (GSI Japan). Processed with Mapterhorn (japan-bridge, interim).',
+                # See the ARCHIVE_NAME/ARCHIVE_DESCRIPTION comment above for
+                # why these are set here and why `name` must not equal the
+                # Martin source id.
+                'name': ARCHIVE_NAME,
+                'description': ARCHIVE_DESCRIPTION,
+                # Ported from upstream mapterhorn/mapterhorn ca98d40, "Add
+                # encoding terrarium in PMTiles metadata" (#313). Elevation
+                # only, deliberately: lineage tiles carry a single-channel
+                # source-tier category, not Terrarium-packed heights, so
+                # claiming terrarium there would misdescribe the data to any
+                # client that reads this field.
+                **({'encoding': 'terrarium'} if MERGE_DATATYPE != 'lineage' else {}),
             },
         )
     print(f'wrote {OUTPUT}, {total:_} tiles total')
