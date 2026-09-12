@@ -65,7 +65,27 @@ def emit_lineage(filepath, tmp_folder):
     single-source case, renames the only one away entirely), so there is
     no reprojected data left to read from once merge() has returned. This
     is exactly why lineage_inspect.py's own standalone diagnostic never
-    calls merge() at all -- reused here, not rediscovered."""
+    calls merge() at all -- reused here, not rediscovered.
+
+    KNOWN GAP, not fixed here (D165, Opus code review, 2026-09-13): this
+    function has no idempotency check of its own, and reproject()'s own
+    early-return (`if os.path.isfile(reprojection.json): return`) means
+    the per-group tiffs are never regenerated on a resume either. If
+    run() crashes AFTER merge() has already consumed those tiffs but
+    BEFORE this item's overall .done manifest gets written (e.g. a crash
+    inside aggregation_tile.main()), a resumed run() call reaches this
+    function with no per-group tiffs left to read at all --
+    compute_provenance()'s narrowed glob (fixed this same session) now
+    raises a clean ValueError instead of silently miscounting, but
+    doesn't provide any way to actually recover: real inputs are gone.
+    Making this whole reproject-to-tile chain safely resumable at any
+    crash point needs its own design pass (each stage would need to
+    record enough to either skip correctly or regenerate what a later
+    stage already consumed) -- deliberately not attempted as a quick
+    patch here, since a rushed fix risks the same class of silent-
+    certification bug this review exists to catch (e.g. skipping lineage
+    recomputation without any way to know whether a prior attempt ever
+    actually produced a real lineage tile for this item)."""
     filename = filepath.split('/')[-1]
     aggregation_id = filepath.split('/')[-2]
     z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]

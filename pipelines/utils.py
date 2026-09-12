@@ -541,25 +541,41 @@ def write_done_manifest(done_path, datatypes, generation_id, entries, extra=None
     os.replace(tmp_path, done_path)
 
 def read_done_manifest(done_path):
-    """None = no marker at all. {} = legacy empty/unparseable marker
-    (1-go's touch files). dict = a real manifest."""
+    """None = no marker at all. {} = legacy empty marker (1-go's touch
+    files -- always exactly 0 bytes, from `touch`). False = corrupt/
+    truncated/unparseable marker -- deliberately NOT the same as a
+    legitimate legacy marker (D165, Opus code review finding #4, 2026-
+    09-13): before this distinction, a marker truncated by a crash mid-
+    write (APFS committing an os.replace() rename before its data
+    blocks are actually flushed -- write_done_manifest() has no fsync,
+    nor does anything else in this codebase) read identically to a
+    genuine pre-D119 completion marker and got silently certified as
+    'done and current' by done_covers()/done_is_current() with zero
+    verification, for elevation-only runs specifically (a lineage
+    requirement never matched the legacy elevation-only bypass). dict =
+    a real manifest."""
     if not os.path.isfile(done_path):
         return None
+    if os.path.getsize(done_path) == 0:
+        return {}
     try:
         with open(done_path) as f:
             manifest = json.load(f)
     except (ValueError, OSError):
-        return {}
+        return False
     if not isinstance(manifest, dict) or manifest.get('format') != DONE_MANIFEST_FORMAT:
-        return {}
+        return False
     return manifest
 
 def done_covers(done_path, required_datatypes):
     """Does this marker certify all of `required_datatypes`? (No
     freshness check -- see done_is_current() for that.) Legacy empty
-    markers certify elevation only: they predate lineage entirely."""
+    markers certify elevation only: they predate lineage entirely. A
+    corrupt/truncated marker (read_done_manifest() returning False, not
+    a genuine {}) never certifies anything -- see that function's own
+    docstring for why this distinction matters."""
     manifest = read_done_manifest(done_path)
-    if manifest is None:
+    if manifest is None or manifest is False:
         return False
     if not manifest:
         return set(required_datatypes) <= {'elevation'}
@@ -571,9 +587,11 @@ def done_is_current(done_path, required_datatypes, entries):
     entry list the caller would record on completion), i.e. an input was
     repaired/replaced/added since this marker was written -- the caller
     should rebuild. Legacy empty markers have no fingerprint to compare;
-    they stay 'current' for elevation (deliberate: never churn 1-go)."""
+    they stay 'current' for elevation (deliberate: never churn 1-go). A
+    corrupt/truncated marker (read_done_manifest() returning False) is
+    never current -- see that function's own docstring (D165)."""
     manifest = read_done_manifest(done_path)
-    if manifest is None:
+    if manifest is None or manifest is False:
         return False
     if not manifest:
         return set(required_datatypes) <= {'elevation'}

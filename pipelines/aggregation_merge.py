@@ -110,7 +110,17 @@ def merge(filepath, tmp_folder):
                                     min(single_tile_size, height - y),
                                 )
                                 block = np.nan_to_num(src.read(1, window=window), nan=-9999)
-                                block[block == -9999] = 0
+                                # D165: no zero-fill here -- unlike the
+                                # multi-group branch below, nothing blurs
+                                # this single group's own internal gaps
+                                # ("nothing else to blend against"), so
+                                # there's no numerical reason to destroy
+                                # -9999 before writing. aggregation_tile.py's
+                                # create_tile() already expects to receive
+                                # raw -9999 for genuinely uncovered pixels
+                                # (it computes valid_mask = subdata != -9999
+                                # itself) -- zero-filling here just meant it
+                                # never got the chance to.
                                 dst_dtype = dst.dtypes[0]
                                 if block.dtype != np.dtype(dst_dtype):
                                     with np.errstate(under='ignore'):
@@ -214,6 +224,19 @@ def merge(filepath, tmp_folder):
                             # correct; recomputing from the final state was
                             # the lossy step. Deleted, not rewritten.
 
+                            # D165 (2026-09-13, found by an Opus code review
+                            # ahead of 2-go): snapshot which pixels no group
+                            # EVER filled, before the unconditional zero-fill
+                            # right below (needed for the blur math -- a
+                            # gaussian filter can't operate on a -9999
+                            # sentinel sensibly) destroys that information
+                            # for good. Restored as real -9999 further down,
+                            # for whichever of these pixels the blur below
+                            # never actually reached -- see that restoration
+                            # step's own comment for why this doesn't
+                            # reintroduce D114(B)'s cliff bug.
+                            never_covered_mask = (merged_tile == -9999)
+
                             # Fill unconditionally. This used to hide inside
                             # the blur gate below, so any block whose
                             # boundary_tile came out empty (no valid pixels
@@ -242,7 +265,31 @@ def merge(filepath, tmp_folder):
                                 boundary_tile_blurred = 3 * boundary_tile_blurred ** 2 - 2 * boundary_tile_blurred ** 3
                                 merged_tile_blurred = ndimage.gaussian_filter(merged_tile, sigma=sigma, truncate=truncate)
                                 merged_tile = boundary_tile_blurred * merged_tile_blurred + (1 - boundary_tile_blurred) * merged_tile
-                        
+                                # D165: a pixel the blur never touched at all
+                                # (boundary_tile_blurred == 0, i.e. outside
+                                # the gaussian kernel's reach from every
+                                # boundary) that was ALSO never covered by
+                                # any group is genuinely absent data, not a
+                                # flat 0m elevation -- restore -9999 there.
+                                # Pixels the blur DID reach (D114(B)'s own
+                                # coastal transition zone) are left exactly
+                                # as before: their blended value stands,
+                                # never overwritten back to -9999, so that
+                                # fix's smoothing is untouched.
+                                still_uncovered_mask = never_covered_mask & (boundary_tile_blurred == 0)
+                            else:
+                                # No blur ran at all -- either this whole
+                                # window was untouched by every group
+                                # (boundary_tile empty because there was no
+                                # valid pixel anywhere to erode a boundary
+                                # from), or the maxzoom<=11 guard skipped it
+                                # (never hit in practice, see that guard's
+                                # own comment). Either way, whatever never_
+                                # covered_mask marked is genuinely nodata
+                                # with no smoothing to preserve.
+                                still_uncovered_mask = never_covered_mask
+                            merged_tile[still_uncovered_mask] = -9999
+
                         crop_y_start = overlap if y > 0 else 0
                         crop_y_end = merged_tile.shape[0] - (overlap if y_end < height else 0)
                         crop_x_start = overlap if x > 0 else 0

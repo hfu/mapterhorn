@@ -53,7 +53,14 @@ def compute_provenance(filepath, tmp_folder):
     tmp_folder's per-group `{i}-3857.tiff` reprojected files -- these are
     consumed and deleted by aggregation_merge.merge() itself, so this has to
     run *before* merge(), right after aggregation_reproject.reproject()."""
-    num_tiff_files = len(glob(f'{tmp_folder}/*-3857.tiff'))
+    # D165 (Opus code review, 2026-09-13): narrowed to match
+    # aggregation_merge.py's own [0-9]* glob -- an unguarded `*-3857.tiff`
+    # also matches merged-3857.tiff, exactly the D48 hazard merge() itself
+    # was fixed to avoid. On a crash-and-resume after merge() has already
+    # run and deleted the per-group tiffs, this bare glob would count
+    # merged-3857.tiff as one more input file, then fail trying to open
+    # a per-group tiff that no longer exists.
+    num_tiff_files = len(glob(f'{tmp_folder}/[0-9]*-3857.tiff'))
     if num_tiff_files == 0:
         raise ValueError(f'no reprojected tiffs found for {filepath}')
 

@@ -291,7 +291,20 @@ def try_reuse_from_previous_generation(filepath, filename, current_generation_id
     )
     return True
 
-def write_aggregation_todos():
+def write_aggregation_todos(aggregation_id=None):
+    """D165 (Opus code review, 2026-09-13): `aggregation_id` defaults to
+    None, re-deriving `aggregation_ids[-1]` (newest ULID on disk) for
+    standalone/backward-compatible invocation -- but main() now passes
+    its OWN resolved aggregation_id explicitly (see main()'s own
+    AGGREGATION_ID override) rather than letting this function silently
+    re-derive a possibly-different one. Before this, running
+    `AGGREGATION_ID=<a non-latest generation>` to re-plan a specific
+    generation would write fresh coverings into that generation's own
+    folder via write_aggregation_items(), but every .todo/.done/reuse-
+    copy from this function would land against whatever generation
+    happened to be lexicographically newest instead -- a silent no-op
+    for the generation actually being re-planned, and unrelated churn
+    for the wrong one."""
     # DECISIONS.md D51/D57: this used to compare the current generation's
     # own aggregation.csv content against aggregation_ids[-2] (the old
     # Kyushu-scope test generation) via get_dirty_aggregation_filenames(),
@@ -321,8 +334,16 @@ def write_aggregation_todos():
     # nothing beyond a fast no-op skip -- that idempotency guard is
     # unchanged.
     aggregation_ids = utils.get_aggregation_ids()
-    aggregation_id = aggregation_ids[-1]
-    last_aggregation_id = aggregation_ids[-2] if len(aggregation_ids) >= 2 else None
+    if aggregation_id is None:
+        aggregation_id = aggregation_ids[-1]
+    # last_aggregation_id is always "whichever generation immediately
+    # precedes aggregation_id in on-disk ULID order" -- correct whether
+    # aggregation_id is the newest (the common case) or an explicit
+    # override, as long as the override is itself a real, already-
+    # existing generation directory (true for any re-plan of a
+    # generation write_aggregation_items() just wrote coverings into).
+    older_ids = [i for i in aggregation_ids if i < aggregation_id]
+    last_aggregation_id = older_ids[-1] if older_ids else None
 
     filepaths = sorted(glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv'))
     reused_count = 0
@@ -376,7 +397,7 @@ def main():
     write_aggregation_items(macrotile_map, aggregation_tiles, aggregation_id)
 
     print('write aggregation todos...')
-    write_aggregation_todos()
+    write_aggregation_todos(aggregation_id)
 
 
 if __name__ == '__main__':
