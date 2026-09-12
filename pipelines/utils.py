@@ -399,18 +399,96 @@ def stat_input_entry(path):
     except OSError:
         return {'path': path, 'missing': True}
 
-def content_input_entry(path):
+def content_input_entry(path, canonical_path=None):
     """Fingerprint entry for a small text input (a covering .csv), hashed
     by CONTENT, not mtime -- downsampling_covering.py regenerates every
     .csv (identical bytes, fresh mtime) each publish cycle, and an
-    mtime-based entry would mark the whole pyramid stale every cycle."""
+    mtime-based entry would mark the whole pyramid stale every cycle.
+
+    `canonical_path` (D163): the recorded 'path' field defaults to `path`
+    itself, which is fine for every EXISTING (within-generation) caller.
+    But `path` for an aggregation covering CSV is `aggregation-store/
+    {generation_id}/{filename}` -- embeds the generation_id -- so two
+    byte-identical CSVs in different generations would still produce
+    DIFFERENT fingerprints purely because their 'path' string differs,
+    making any cross-generation comparison of inputs_fingerprint always
+    mismatch even when nothing actually changed. Callers that build
+    entries for a cross-generation reuse check (aggregation_covering.py's
+    try_reuse_from_previous_generation) must pass a generation-agnostic
+    `canonical_path` (just the filename) so the same item in any
+    generation hashes to the same entry."""
     h = hashlib.sha256()
+    recorded_path = canonical_path if canonical_path is not None else path
     try:
         with open(path, 'rb') as f:
             h.update(f.read())
-        return {'path': path, 'sha256': h.hexdigest()}
+        return {'path': recorded_path, 'sha256': h.hexdigest()}
     except OSError:
-        return {'path': path, 'missing': True}
+        return {'path': recorded_path, 'missing': True}
+
+_SOURCE_MD5_CACHE = {}
+
+def get_source_md5_map(source):
+    """mapterhorn-japan-bridge DECISIONS1.md D163: {filename: md5} for one
+    source, read via open_manifest() (D14/D26's own manifest opener,
+    already handles the `../source-catalog/{source}/file_list.csv[.gz]`
+    path and the gzip-vs-plain fallback -- reused here rather than
+    reimplemented) from that source's own download manifest (`url,size,
+    md5` columns; md5 is the S3 ETag, not a fresh local hash). Memoized
+    per process: this is looked up once per (source, filename) pair for
+    every aggregation item nationwide, and the manifest itself can be
+    hundreds of thousands of rows (jpnational1 alone is 291,779)."""
+    if source in _SOURCE_MD5_CACHE:
+        return _SOURCE_MD5_CACHE[source]
+    md5_map = {}
+    with open_manifest(source) as f:
+        f.readline() # skip header (url,size,md5)
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            url, _size, md5 = line.rsplit(',', 2)
+            filename = url.split('/')[-1]
+            md5_map[filename] = md5
+    _SOURCE_MD5_CACHE[source] = md5_map
+    return md5_map
+
+def md5_input_entries_for_aggregation_csv(filepath):
+    """mapterhorn-japan-bridge DECISIONS1.md D163: one fingerprint entry
+    per (source, filename) referenced by an *-aggregation.csv covering,
+    keyed by that source's own manifest MD5 -- NOT the covering CSV's own
+    text (which only records filename+maxzoom, not file content). This
+    closes a real, documented gap: D18/D35 found a same-filename,
+    same-byte-size file whose CONTENT silently changed after a
+    corruption fix (`aws s3 sync --size-only` would have missed it too).
+    A content_input_entry() of the covering CSV alone cannot detect that
+    class of change; comparing this function's own entries across
+    generations can, since a changed file gets a new MD5 in its source's
+    manifest once re-uploaded, regardless of filename or byte size.
+    Deliberately does NOT touch aggregation.csv's own on-disk format
+    (still exactly `source,filename,maxzoom` -- D18/D20's own warning
+    about partial-application accidents applies here: get_grouped_
+    source_items() and every other reader of this file unpacks exactly
+    3 comma-separated fields and would break on a 4th column)."""
+    entries = []
+    with open(filepath) as f:
+        f.readline() # skip header
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            source, filename, _maxzoom = line.split(',')
+            md5_map = get_source_md5_map(source)
+            entry_path = f'{source}/{filename}'
+            if filename in md5_map:
+                entries.append({'path': entry_path, 'md5': md5_map[filename]})
+            else:
+                # Should not happen (covering was built from this same
+                # manifest) -- but a lookup miss must make the fingerprint
+                # visibly different, never silently absent, so a stale
+                # manifest can't accidentally look unchanged.
+                entries.append({'path': entry_path, 'missing': True})
+    return entries
 
 def compute_inputs_fingerprint(entries):
     h = hashlib.sha256()
@@ -419,6 +497,8 @@ def compute_inputs_fingerprint(entries):
             h.update(f"{e['path']}\tMISSING\n".encode())
         elif 'sha256' in e:
             h.update(f"{e['path']}\tsha256:{e['sha256']}\n".encode())
+        elif 'md5' in e:
+            h.update(f"{e['path']}\tmd5:{e['md5']}\n".encode())
         else:
             h.update(f"{e['path']}\t{e['size']}\t{e['mtime_ns']}\n".encode())
     return f'sha256:{h.hexdigest()}'

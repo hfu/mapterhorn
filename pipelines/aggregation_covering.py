@@ -1,10 +1,13 @@
 from glob import glob
 import os
+import shutil
 
 import mercantile
 from ulid import ULID
 
 import utils
+
+REQUIRED_DATATYPES = ['elevation', 'lineage'] if os.environ.get('EMIT_LINEAGE', '0') == '1' else ['elevation']
 
 def get_mercator_resolutions(minzoom, maxzoom):
     resolutions = []
@@ -178,6 +181,80 @@ def write_aggregation_items(macrotile_map, aggregation_tiles, aggregation_id):
         with open(f'{folder}/{aggregation_tile.z}-{aggregation_tile.x}-{aggregation_tile.y}-{child_z}-aggregation.csv', 'w') as f:
             f.writelines(lines)
 
+def try_reuse_from_previous_generation(filepath, filename, current_generation_id, last_generation_id):
+    """DECISIONS1.md D163: the safe redesign of the dirty-tracking D57
+    ripped out. Returns True (and, on success, materializes a real
+    output file plus a real .done manifest inside the CURRENT
+    generation's own folder) only when ALL of the following hold:
+
+    1. An equivalent item exists in the previous generation, with a
+       .done manifest that certifies every datatype this run needs.
+    2. Today's fingerprint of this item's inputs -- the covering CSV's
+       own content AND every referenced source file's own MD5 (D163;
+       see utils.md5_input_entries_for_aggregation_csv's own docstring
+       for why MD5, not just the CSV text, is required) -- exactly
+       matches what that manifest recorded when it was built.
+    3. The previous generation's own pmtiles-store output file actually
+       exists on disk, for every required datatype -- D57's own explicit
+       "verify the referenced output actually exists" requirement, never
+       just trust the marker.
+
+    Any single failure falls through to full reprocessing (write a
+    .todo, the current safe default) -- never a bare skip. This is the
+    load-bearing difference from the pre-D57 code: that version only
+    checked step 2 (and an unreliable version of it, comparing against
+    whatever the second-to-last generation happened to be, not
+    verifying it was ever complete) and then SKIPPED the item entirely,
+    leaving pmtiles-store's cross-generation flat namespace as the only
+    thing standing between "unchanged" and "silently never built" --
+    exactly what let 2,343 positions vanish. This version never skips:
+    on a match, it COPIES the previous generation's own file and writes
+    a brand-new manifest scoped to the CURRENT generation_id, so the
+    current generation ends up with its own real artifact, exactly as
+    if aggregation_run.py had built it fresh. Since D95/D124 made
+    pmtiles-store generation_id-scoped, no other generation's future run
+    can ever rename or delete this copy out from under it -- closing
+    D69's stale-marker failure mode too, not just D57's undercount.
+    """
+    last_filepath = f'aggregation-store/{last_generation_id}/{filename}'
+    last_done_path = f'{last_filepath}.done'
+    if not os.path.isfile(last_filepath) or not os.path.isfile(last_done_path):
+        return False
+    if not utils.done_covers(last_done_path, REQUIRED_DATATYPES):
+        return False
+
+    # canonical_path=filename: see utils.content_input_entry()'s own
+    # docstring -- filepath embeds THIS generation's own id, so without
+    # this the fingerprint could never match the previous generation's
+    # manifest even for byte-identical content.
+    current_entries = [utils.content_input_entry(filepath, canonical_path=filename)] + utils.md5_input_entries_for_aggregation_csv(filepath)
+    if not utils.done_is_current(last_done_path, REQUIRED_DATATYPES, current_entries):
+        return False
+
+    z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
+
+    last_out_paths = {}
+    for datatype in REQUIRED_DATATYPES:
+        last_out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype=datatype, generation_id=last_generation_id)
+        last_out_path = f'{last_out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
+        if not os.path.isfile(last_out_path):
+            return False
+        last_out_paths[datatype] = last_out_path
+
+    for datatype, last_out_path in last_out_paths.items():
+        current_out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype=datatype, generation_id=current_generation_id)
+        utils.create_folder(current_out_folder)
+        shutil.copy2(last_out_path, f'{current_out_folder}/{z}-{x}-{y}-{child_z}.pmtiles')
+
+    utils.write_done_manifest(
+        f'{filepath}.done',
+        datatypes=REQUIRED_DATATYPES,
+        generation_id=current_generation_id,
+        entries=current_entries,
+        extra={'reused_from_generation_id': last_generation_id},
+    )
+    return True
+
 def write_aggregation_todos():
     # DECISIONS.md D51/D57: this used to compare the current generation's
     # own aggregation.csv content against aggregation_ids[-2] (the old
@@ -198,20 +275,32 @@ def write_aggregation_todos():
     # (D48) was 100% of an undercounted denominator, not 100% of the
     # true national total.
     #
-    # aggregation_run.py's own run() already checks `.done` before doing
-    # any real work (os.path.isfile(f'{filepath}.done')), so writing a
-    # .todo for every item -- including ones that already have a .done
-    # from a genuinely-completed earlier pass -- costs nothing beyond a
-    # fast no-op skip. That existing check is the real, correct
-    # idempotency guard; this function's own dirty-filtering was a
-    # redundant, and here actively harmful, second gate.
+    # D163: dirty-tracking is back, redesigned to be safe --
+    # try_reuse_from_previous_generation() above verifies actual output
+    # existence and a real content+MD5 fingerprint match before ever
+    # treating an item as already built; anything short of that gets a
+    # .todo like before. aggregation_run.py's own run() still checks
+    # `.done` before doing any real work, so a redundant .todo for an
+    # already-`.done` item (reused or genuinely rebuilt) still costs
+    # nothing beyond a fast no-op skip -- that idempotency guard is
+    # unchanged.
     aggregation_ids = utils.get_aggregation_ids()
     aggregation_id = aggregation_ids[-1]
+    last_aggregation_id = aggregation_ids[-2] if len(aggregation_ids) >= 2 else None
 
     filepaths = sorted(glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv'))
+    reused_count = 0
     for filepath in filepaths:
-        with open(f'{filepath}.todo', 'w') as f:
-            f.write('')
+        filename = filepath.split('/')[-1]
+        reused = False
+        if last_aggregation_id:
+            reused = try_reuse_from_previous_generation(filepath, filename, aggregation_id, last_aggregation_id)
+        if reused:
+            reused_count += 1
+        else:
+            with open(f'{filepath}.todo', 'w') as f:
+                f.write('')
+    print(f'aggregation todos: {reused_count}/{len(filepaths)} reused from generation {last_aggregation_id}, {len(filepaths) - reused_count} queued for (re)processing')
 
 def main():
 

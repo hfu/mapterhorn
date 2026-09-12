@@ -114,11 +114,28 @@ def run(filepath):
     # identity. Written atomically; the old .todo -> .done rename is
     # replaced by manifest-write + best-effort .todo removal (a missing
     # .todo is no longer an error -- D110's rehearsal tripped over that).
+    #
+    # D163: also fingerprint each referenced source file's own MD5 (from
+    # its source's download manifest), not just the covering CSV's text.
+    # This is what lets a future generation's aggregation_covering.py
+    # safely reuse this item's own output instead of rebuilding it: a
+    # csv-only fingerprint can't tell "same filename, same maxzoom" apart
+    # from "same filename, same maxzoom, but the file's actual content
+    # was silently corrected since" (the exact D18/D35 scenario), so
+    # csv-content alone is not a safe basis for cross-generation reuse.
+    #
+    # canonical_path=filename (not the real filepath): filepath embeds
+    # THIS run's own aggregation_id in its directory, so two
+    # byte-identical CSVs in different generations would otherwise
+    # record different 'path' strings and therefore always produce
+    # different inputs_fingerprint values, defeating cross-generation
+    # comparison before it even starts a real diff. See
+    # utils.content_input_entry()'s own docstring.
     utils.write_done_manifest(
         done_path,
         datatypes=required_datatypes,
         generation_id=aggregation_id,
-        entries=[utils.content_input_entry(filepath)],
+        entries=[utils.content_input_entry(filepath, canonical_path=filename)] + utils.md5_input_entries_for_aggregation_csv(filepath),
     )
     try:
         os.remove(f'{filepath}.todo')
