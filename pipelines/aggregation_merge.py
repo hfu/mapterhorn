@@ -27,6 +27,24 @@ def merge(filepath, tmp_folder):
         return
 
     output_path = f'{tmp_folder}/merged-3857.tiff'
+    # mapterhorn-japan-bridge DECISIONS.md D120 Fable review item #4: both
+    # write branches below used to open output_path directly in 'w' mode
+    # and write it incrementally window-by-window. A crash mid-write (this
+    # process runs unattended for hours per item, across thousands of
+    # items, and this project has hit real mid-run crashes before -- D129
+    # kernel panic, D157 ENOSPC, D158 volume disconnect) would leave a
+    # TRUNCATED merged-3857.tiff on disk. The recovery check just below
+    # (`if os.path.isfile(output_path):`) would then treat that truncated
+    # file as a genuinely-completed merge and touch merge-done, silently
+    # propagating corrupt/incomplete data into aggregation_tile.py's
+    # tiling step -- exactly the failure Fable's review flagged. Fixed by
+    # writing to tmp_output_path and only os.replace()-ing it into place
+    # after the writer has fully closed (same same-directory-tmp +
+    # os.replace pattern already used elsewhere, e.g. utils.create_
+    # archive()) -- once output_path exists, it is now guaranteed
+    # complete, so the recovery check above stays correct with no further
+    # change.
+    tmp_output_path = f'{output_path}.tmp'
 
     # tmp_folder is never wiped between attempts at the same item
     # (aggregation_run.py's own os.makedirs(tmp_folder, exist_ok=True)) -- if
@@ -77,7 +95,7 @@ def merge(filepath, tmp_folder):
                         compress='ZSTD',
                         zstd_level=1,
                     )
-                    with rasterio.open(output_path, 'w', **profile) as dst:
+                    with rasterio.open(tmp_output_path, 'w', **profile) as dst:
                         for y in range(0, height, single_tile_size):
                             for x in range(0, width, single_tile_size):
                                 window = rasterio.windows.Window(
@@ -92,6 +110,7 @@ def merge(filepath, tmp_folder):
                                     with np.errstate(under='ignore'):
                                         block = block.astype(dst_dtype, copy=False)
                                 dst.write(block, 1, window=window)
+            os.replace(tmp_output_path, output_path)
             os.remove(src_path)
         command = f'touch {done_filepath}'
         utils.run_command(command)
@@ -120,7 +139,7 @@ def merge(filepath, tmp_folder):
                 zstd_level=1,
             )
             
-            with rasterio.open(output_path, 'w', **profile) as dst:
+            with rasterio.open(tmp_output_path, 'w', **profile) as dst:
                 for y in range(0, height, tile_size):
                     for x in range(0, width, tile_size):
                         y_start = max(0, y - overlap)
@@ -231,6 +250,7 @@ def merge(filepath, tmp_folder):
                                 output_tile = output_tile.astype(dst_dtype, copy=False)
                         dst.write(output_tile, 1, window=output_window)
 
+    os.replace(tmp_output_path, output_path)
     for tiff_filepath in tiff_filepaths:
         os.remove(tiff_filepath)
 
