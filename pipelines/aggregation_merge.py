@@ -43,8 +43,14 @@ def merge(filepath, tmp_folder):
     # os.replace pattern already used elsewhere, e.g. utils.create_
     # archive()) -- once output_path exists, it is now guaranteed
     # complete, so the recovery check above stays correct with no further
-    # change.
-    tmp_output_path = f'{output_path}.tmp'
+    # change. PID-suffixed (like utils.create_archive()'s own
+    # .tmp-{os.getpid()}) as defense in depth: merge() is only ever
+    # invoked once per tmp_folder in the current pipeline, so a bare
+    # `.tmp` is safe today, but the suffix costs nothing and rules out
+    # two concurrent invocations against the same tmp_folder (e.g. an
+    # operator manually re-running an item while a worker still holds
+    # it) silently corrupting each other's output.
+    tmp_output_path = f'{output_path}.tmp-{os.getpid()}'
 
     # tmp_folder is never wiped between attempts at the same item
     # (aggregation_run.py's own os.makedirs(tmp_folder, exist_ok=True)) -- if

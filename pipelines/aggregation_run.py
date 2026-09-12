@@ -94,7 +94,11 @@ def run(filepath):
     # longer silently satisfies an EMIT_LINEAGE run -- that was the hard
     # blocker that would have made a lineage pass over an already-
     # aggregated generation a national-scale no-op.
-    required_datatypes = ['elevation', 'lineage'] if EMIT_LINEAGE else ['elevation']
+    # D164: consolidated into utils.get_required_datatypes() -- this used
+    # to be re-derived from EMIT_LINEAGE independently here and in
+    # aggregation_covering.py, two copies of the same rule that could
+    # silently drift apart.
+    required_datatypes = utils.get_required_datatypes()
     done_path = f'{filepath}.done'
     if utils.done_covers(done_path, required_datatypes):
         print(f'Aggregation item {item} already done. Skipping...')
@@ -124,18 +128,17 @@ def run(filepath):
     # was silently corrected since" (the exact D18/D35 scenario), so
     # csv-content alone is not a safe basis for cross-generation reuse.
     #
-    # canonical_path=filename (not the real filepath): filepath embeds
-    # THIS run's own aggregation_id in its directory, so two
-    # byte-identical CSVs in different generations would otherwise
-    # record different 'path' strings and therefore always produce
-    # different inputs_fingerprint values, defeating cross-generation
-    # comparison before it even starts a real diff. See
-    # utils.content_input_entry()'s own docstring.
+    # D164: utils.aggregation_fingerprint_entries() (canonical_path=
+    # filename, not the real filepath -- filepath embeds THIS run's own
+    # aggregation_id, which would otherwise make cross-generation
+    # comparison always fail; see that helper's own docstring) --
+    # consolidates what used to be hand-built separately here, in
+    # aggregation_covering.py's reuse check, and in the backfill script.
     utils.write_done_manifest(
         done_path,
         datatypes=required_datatypes,
         generation_id=aggregation_id,
-        entries=[utils.content_input_entry(filepath, canonical_path=filename)] + utils.md5_input_entries_for_aggregation_csv(filepath),
+        entries=utils.aggregation_fingerprint_entries(filepath, filename),
     )
     try:
         os.remove(f'{filepath}.todo')

@@ -1,4 +1,5 @@
 import subprocess
+import csv
 import gzip
 import json
 from datetime import datetime, timezone
@@ -288,6 +289,19 @@ def get_dirty_aggregation_filenames(current_aggregation_id, last_aggregation_id)
 LAYERS = ('aggregation', 'downsampling')
 DATATYPES = ('elevation', 'lineage')
 
+def get_required_datatypes():
+    """mapterhorn-japan-bridge DECISIONS1.md D164: the single source of
+    truth for "which datatypes does this run need", read from EMIT_
+    LINEAGE. Before this, aggregation_run.py and aggregation_covering.py
+    each independently re-derived this same expression at different
+    times in different modules (`['elevation', 'lineage'] if os.environ.
+    get('EMIT_LINEAGE', '0') == '1' else ['elevation']`) -- harmless
+    while the two copies stayed byte-identical, but nothing enforced
+    that; a future change to this rule (a third datatype, a different
+    env var) would only need updating here once instead of drifting
+    between the two call sites."""
+    return ['elevation', 'lineage'] if os.environ.get('EMIT_LINEAGE', '0') == '1' else ['elevation']
+
 # 1-go (the first full national generation) predates both the D95/D107
 # layer/datatype split and the generation_id level below -- its entire
 # production dataset lives in the old flat `pmtiles-store/{z7bucket}/...`
@@ -432,24 +446,23 @@ def get_source_md5_map(source):
     """mapterhorn-japan-bridge DECISIONS1.md D163: {filename: md5} for one
     source, read via open_manifest() (D14/D26's own manifest opener,
     already handles the `../source-catalog/{source}/file_list.csv[.gz]`
-    path and the gzip-vs-plain fallback -- reused here rather than
-    reimplemented) from that source's own download manifest (`url,size,
-    md5` columns; md5 is the S3 ETag, not a fresh local hash). Memoized
-    per process: this is looked up once per (source, filename) pair for
-    every aggregation item nationwide, and the manifest itself can be
-    hundreds of thousands of rows (jpnational1 alone is 291,779)."""
+    path and the gzip-vs-plain fallback) and csv.DictReader (D164: the
+    first version hand-rolled this with `line.rsplit(',', 2)`, which
+    source_download.py's own load_manifest() already avoided by using
+    DictReader -- reused here rather than reimplementing the fragile
+    version a second time) from that source's own download manifest
+    (`url,size,md5` columns; md5 is the S3 ETag, not a fresh local
+    hash). Memoized per process: this is looked up once per (source,
+    filename) pair for every aggregation item nationwide, and the
+    manifest itself can be hundreds of thousands of rows (jpnational1
+    alone is 291,779)."""
     if source in _SOURCE_MD5_CACHE:
         return _SOURCE_MD5_CACHE[source]
     md5_map = {}
     with open_manifest(source) as f:
-        f.readline() # skip header (url,size,md5)
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            url, _size, md5 = line.rsplit(',', 2)
-            filename = url.split('/')[-1]
-            md5_map[filename] = md5
+        for row in csv.DictReader(f):
+            filename = row['url'].split('/')[-1]
+            md5_map[filename] = row['md5']
     _SOURCE_MD5_CACHE[source] = md5_map
     return md5_map
 
@@ -467,28 +480,33 @@ def md5_input_entries_for_aggregation_csv(filepath):
     manifest once re-uploaded, regardless of filename or byte size.
     Deliberately does NOT touch aggregation.csv's own on-disk format
     (still exactly `source,filename,maxzoom` -- D18/D20's own warning
-    about partial-application accidents applies here: get_grouped_
-    source_items() and every other reader of this file unpacks exactly
-    3 comma-separated fields and would break on a 4th column)."""
+    about partial-application accidents applies here: read_aggregation_
+    csv_rows() and every other reader of this file unpacks exactly 3
+    comma-separated fields and would break on a 4th column)."""
     entries = []
-    with open(filepath) as f:
-        f.readline() # skip header
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            source, filename, _maxzoom = line.split(',')
-            md5_map = get_source_md5_map(source)
-            entry_path = f'{source}/{filename}'
-            if filename in md5_map:
-                entries.append({'path': entry_path, 'md5': md5_map[filename]})
-            else:
-                # Should not happen (covering was built from this same
-                # manifest) -- but a lookup miss must make the fingerprint
-                # visibly different, never silently absent, so a stale
-                # manifest can't accidentally look unchanged.
-                entries.append({'path': entry_path, 'missing': True})
+    for source, filename, _maxzoom in read_aggregation_csv_rows(filepath):
+        md5_map = get_source_md5_map(source)
+        entry_path = f'{source}/{filename}'
+        if filename in md5_map:
+            entries.append({'path': entry_path, 'md5': md5_map[filename]})
+        else:
+            # Should not happen (covering was built from this same
+            # manifest) -- but a lookup miss must make the fingerprint
+            # visibly different, never silently absent, so a stale
+            # manifest can't accidentally look unchanged.
+            entries.append({'path': entry_path, 'missing': True})
     return entries
+
+def aggregation_fingerprint_entries(csv_path, canonical_filename):
+    """mapterhorn-japan-bridge DECISIONS1.md D164: the full .done-manifest
+    `entries` list for one aggregation item -- the covering CSV's own
+    content plus every referenced source file's MD5. Three call sites
+    (aggregation_run.py's run(), aggregation_covering.py's try_reuse_
+    from_previous_generation(), and backfill_aggregation_md5_
+    fingerprints.py) used to each hand-construct this same two-part list
+    independently; factored here so a future change to what an
+    aggregation item's fingerprint covers only needs updating once."""
+    return [content_input_entry(csv_path, canonical_path=canonical_filename)] + md5_input_entries_for_aggregation_csv(csv_path)
 
 def compute_inputs_fingerprint(entries):
     h = hashlib.sha256()
@@ -602,6 +620,25 @@ def get_product_type_rank(filename):
         return PRODUCT_TYPE_RANK[m.group(1).upper()]
     return 0
 
+def read_aggregation_csv_rows(filepath):
+    """mapterhorn-japan-bridge DECISIONS1.md D164: (source, filename,
+    maxzoom) triples from a *-aggregation.csv covering, in file order --
+    the one place that knows this file's `source,filename,maxzoom`
+    layout. Shared by get_grouped_source_items() (below) and
+    md5_input_entries_for_aggregation_csv() (D163), which used to each
+    hand-roll their own copy of this same parse -- a real risk if the
+    format ever changed and only one of the two got updated."""
+    rows = []
+    with open(filepath) as f:
+        f.readline() # skip header
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            source, filename, maxzoom = line.split(',')
+            rows.append((source, filename, int(maxzoom)))
+    return rows
+
 # Group source items by (maxzoom, source, product-type rank), in that
 # priority order -- e.g. for a tile covered by jpnational1/jpnational5
 # (a mix of DEM5A/5B/5C)/jpnational10 (DEM10A/10B)/jpnationalsea, this
@@ -614,14 +651,8 @@ def get_product_type_rank(filename):
 # groups (the same mechanism already used for 1m vs 5m vs 10m vs sea),
 # reused as-is since it already handles an arbitrary number of groups.
 def get_grouped_source_items(filepath):
-    lines = []
-    with open(filepath) as f:
-        lines = f.readlines()
-    lines = lines[1:] # skip header
     line_tuples = []
-    for line in lines:
-        source, filename, maxzoom = line.strip().split(',')
-        maxzoom = int(maxzoom)
+    for source, filename, maxzoom in read_aggregation_csv_rows(filepath):
         line_tuples.append((
             -maxzoom,
             source,

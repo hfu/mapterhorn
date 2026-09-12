@@ -7,7 +7,7 @@ from ulid import ULID
 
 import utils
 
-REQUIRED_DATATYPES = ['elevation', 'lineage'] if os.environ.get('EMIT_LINEAGE', '0') == '1' else ['elevation']
+REQUIRED_DATATYPES = utils.get_required_datatypes()
 
 def get_mercator_resolutions(minzoom, maxzoom):
     resolutions = []
@@ -188,21 +188,24 @@ def try_reuse_from_previous_generation(filepath, filename, current_generation_id
     generation's own folder) only when ALL of the following hold:
 
     1. An equivalent item exists in the previous generation, with a
-       .done manifest that certifies every datatype this run needs.
-    2. Today's fingerprint of this item's inputs -- the covering CSV's
+       REAL (not legacy/empty) .done manifest that certifies every
+       datatype this run needs.
+    2. The previous generation's own pmtiles-store output file actually
+       exists on disk, for every required datatype -- D57's own explicit
+       "verify the referenced output actually exists" requirement, never
+       just trust the marker. Checked before step 3 below since it's
+       cheap (just os.path.isfile) and lets an item whose old output was
+       since pruned/moved fail fast, before paying for a fingerprint.
+    3. Today's fingerprint of this item's inputs -- the covering CSV's
        own content AND every referenced source file's own MD5 (D163;
        see utils.md5_input_entries_for_aggregation_csv's own docstring
        for why MD5, not just the CSV text, is required) -- exactly
        matches what that manifest recorded when it was built.
-    3. The previous generation's own pmtiles-store output file actually
-       exists on disk, for every required datatype -- D57's own explicit
-       "verify the referenced output actually exists" requirement, never
-       just trust the marker.
 
     Any single failure falls through to full reprocessing (write a
     .todo, the current safe default) -- never a bare skip. This is the
     load-bearing difference from the pre-D57 code: that version only
-    checked step 2 (and an unreliable version of it, comparing against
+    checked step 3 (and an unreliable version of it, comparing against
     whatever the second-to-last generation happened to be, not
     verifying it was ever complete) and then SKIPPED the item entirely,
     leaving pmtiles-store's cross-generation flat namespace as the only
@@ -215,20 +218,47 @@ def try_reuse_from_previous_generation(filepath, filename, current_generation_id
     pmtiles-store generation_id-scoped, no other generation's future run
     can ever rename or delete this copy out from under it -- closing
     D69's stale-marker failure mode too, not just D57's undercount.
+
+    D164: this function's own caller (write_aggregation_todos()) wraps
+    every call in a try/except -- any exception here (a malformed
+    manifest, a source-catalog manifest that vanished mid-run, a
+    shutil.copy2 I/O error) falls through to writing a .todo for this
+    one item rather than crashing the whole covering pass, so one bad
+    item can never silently strand every item after it in the sorted
+    glob without a .todo OR a .done.
+
+    D164: the child_z used below to locate the previous generation's
+    output file is the covering filename's own PLANNED child_z, not a
+    freshly-recomputed one -- the same trust aggregation_tile.py's own
+    comment warns is unsafe once upsampling exists (D149/D150's
+    "1.6-go"). Safe here by construction, not by assumption: 2-go itself
+    performs no upsampling (planned == actual for every native item,
+    per aggregation_tile.py's own comment), and even if some future run
+    combined reuse with upsampling, a wrong guessed path simply fails
+    the os.path.isfile() check below and falls through to full
+    reprocessing -- never a silent wrong reuse.
     """
     last_filepath = f'aggregation-store/{last_generation_id}/{filename}'
     last_done_path = f'{last_filepath}.done'
     if not os.path.isfile(last_filepath) or not os.path.isfile(last_done_path):
         return False
-    if not utils.done_covers(last_done_path, REQUIRED_DATATYPES):
+
+    # D164: done_covers()/done_is_current() both treat a legacy/empty
+    # manifest ({} -- pre-D119 touch files, or any unparseable JSON) as
+    # "covers elevation, always current" without ever comparing a
+    # fingerprint (see their own docstrings: "Legacy empty markers ...
+    # stay 'current' for elevation, deliberate: never churn 1-go"). That
+    # bypass is exactly the D18/D35 gap this whole mechanism exists to
+    # close -- reachable here if a future generation's immediate
+    # predecessor ever has a legacy/corrupt manifest (not true for
+    # 1.5-go, which this session backfilled with real fingerprints, but
+    # nothing structurally prevents it for some future generation pair).
+    # Require a real, fingerprint-bearing manifest before trusting
+    # anything it says.
+    if not utils.read_done_manifest(last_done_path):
         return False
 
-    # canonical_path=filename: see utils.content_input_entry()'s own
-    # docstring -- filepath embeds THIS generation's own id, so without
-    # this the fingerprint could never match the previous generation's
-    # manifest even for byte-identical content.
-    current_entries = [utils.content_input_entry(filepath, canonical_path=filename)] + utils.md5_input_entries_for_aggregation_csv(filepath)
-    if not utils.done_is_current(last_done_path, REQUIRED_DATATYPES, current_entries):
+    if not utils.done_covers(last_done_path, REQUIRED_DATATYPES):
         return False
 
     z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
@@ -240,6 +270,12 @@ def try_reuse_from_previous_generation(filepath, filename, current_generation_id
         if not os.path.isfile(last_out_path):
             return False
         last_out_paths[datatype] = last_out_path
+
+    # Only now (after every cheap check above has passed) pay for the
+    # per-referenced-file MD5 fingerprint.
+    current_entries = utils.aggregation_fingerprint_entries(filepath, filename)
+    if not utils.done_is_current(last_done_path, REQUIRED_DATATYPES, current_entries):
+        return False
 
     for datatype, last_out_path in last_out_paths.items():
         current_out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype=datatype, generation_id=current_generation_id)
@@ -294,7 +330,21 @@ def write_aggregation_todos():
         filename = filepath.split('/')[-1]
         reused = False
         if last_aggregation_id:
-            reused = try_reuse_from_previous_generation(filepath, filename, aggregation_id, last_aggregation_id)
+            # D164: any exception inside the reuse attempt (a malformed
+            # manifest, a source-catalog manifest that vanished mid-run,
+            # a shutil.copy2 I/O error) falls through to a .todo for
+            # just this one item instead of crashing write_aggregation_
+            # todos() entirely -- without this, every item later in the
+            # sorted glob than the one that raised would end up with
+            # neither a .todo nor a .done, silently reproducing the
+            # "item never gets processed" failure class D57 exists to
+            # prevent, just via an unhandled exception instead of a bad
+            # dirty-filter.
+            try:
+                reused = try_reuse_from_previous_generation(filepath, filename, aggregation_id, last_aggregation_id)
+            except Exception as e:
+                print(f'WARNING: reuse check for {filename} raised {e!r} -- queuing full reprocessing instead')
+                reused = False
         if reused:
             reused_count += 1
         else:
