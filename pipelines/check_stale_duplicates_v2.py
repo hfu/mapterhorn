@@ -19,12 +19,17 @@ import utils
 
 
 def load_aggregation_correct(aggregation_id):
-    correct = {}
-    for filepath in glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv'):
-        filename = filepath.split('/')[-1]
-        z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
-        correct[(z, x, y)] = child_z
-    return correct
+    # D166 Opus code review finding #5: this used to parse child_z from
+    # the covering CSV's own filename, which is the PLANNED/native value
+    # -- wrong for a land item in a generation that upsamples (utils.
+    # leaf_child_z()'s own docstring). Reused here rather than
+    # reimplemented, matching every other real consumer this same review
+    # already fixed (resolve_layer, get_extents_from_coverings,
+    # remove_dangling_pmtiles.py) -- this is exactly the "cross-check
+    # before trusting a .done count" tool CLAUDE.md points at, and it
+    # would have reported every upsampled leaf as a stale duplicate at
+    # the wrong child_z otherwise.
+    return dict(utils.get_leaf_child_z_map(aggregation_id))
 
 
 def load_downsampling_correct(aggregation_id):

@@ -395,8 +395,40 @@ def get_leaf_child_z_map(aggregation_id):
         filename = filepath.split('/')[-1]
         z, x, y, native_child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
         effective_child_z = native_child_z
-        if target_zoom is not None and is_land_item_covering(filepath):
+        # D166 Opus code review finding #1: mirror aggregation_reproject.py's
+        # own `target_zoom > maxzoom` guard exactly -- without max(), a land
+        # item whose native resolution is ALREADY finer than the target (a
+        # smaller table value than 16, or a future source finer than 16)
+        # would make reproject() correctly leave it at its native zoom while
+        # this function still predicted the target, disagreeing about the
+        # same position and tripping the aggregation_tile.py/lineage_tile.py
+        # hard assert. max() makes upsampling something that can only ever
+        # raise a leaf's effective zoom, matching reproject()'s own promise
+        # in both functions identically -- not just "usually agrees today".
+        if target_zoom is not None and target_zoom > native_child_z and is_land_item_covering(filepath):
             effective_child_z = target_zoom
+        # D166 finding #2: aggregation_covering.py's write_aggregation_items()
+        # never deletes a superseded covering from an earlier pass into the
+        # SAME generation (unlike downsampling_covering.py, which does this
+        # for its own file kind) -- a position re-planned with different
+        # source composition can leave two *-aggregation.csv at one (z,x,y).
+        # The old (pre-D166) remove_dangling_pmtiles.py protected every such
+        # covering's own filename from deletion; this dict silently keeps
+        # only the LAST one an unsorted glob happens to yield, which the
+        # rewritten remove_dangling_pmtiles.py would then treat the OTHER
+        # one's real archive as dangling and delete -- a live regression
+        # this function must not paper over. Fail loudly instead: this is
+        # exactly the kind of ambiguity D74-D76 shows must never be resolved
+        # by silently picking one.
+        if (z, x, y) in mapping:
+            raise ValueError(
+                f'duplicate aggregation.csv at position ({z},{x},{y}) in '
+                f'generation {aggregation_id} -- write_aggregation_items() '
+                f'left more than one covering at this position (see '
+                f'aggregation_tile.py\'s own stale-cleanup comment for how '
+                f'this can happen on a re-plan); refusing to silently pick '
+                f'one, since a real leaf archive would then look dangling '
+                f'to remove_dangling_pmtiles.py')
         mapping[(z, x, y)] = effective_child_z
     _LEAF_CHILD_Z_CACHE[aggregation_id] = mapping
     return mapping

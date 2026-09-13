@@ -120,9 +120,37 @@ def run(filepath):
     # silently drift apart.
     required_datatypes = utils.get_required_datatypes()
     done_path = f'{filepath}.done'
+    z, x, y, _planned_child_z = [int(a) for a in item.split('-')]
+    # D166 Opus code review finding #3: done_covers() alone only checks
+    # datatype coverage, not whether this item's recorded leaf_child_z
+    # still matches utils.leaf_child_z()'s current prediction. Without
+    # this second check, adding a generation to LAND_UPSAMPLE_ZOOM_
+    # BY_GENERATION *after* some of its items were already built natively
+    # (a real risk: the policy table can only be keyed by a generation_id
+    # that already exists, so "mint ID, then configure the policy" is a
+    # tempting but unsafe order) would silently skip re-upsampling those
+    # already-.done items forever -- utils.leaf_child_z() would predict
+    # 16 for them from that point on, while their real pmtiles-store
+    # output and their own manifest's recorded leaf_child_z both still
+    # say native. A mismatch here forces a genuine rebuild instead of
+    # trusting a marker that no longer reflects the current policy --
+    # this is the within-generation twin of the cross-generation check
+    # aggregation_covering.py's try_reuse_from_previous_generation()
+    # already has.
     if utils.done_covers(done_path, required_datatypes):
-        print(f'Aggregation item {item} already done. Skipping...')
-        return
+        # `not done_manifest` (None -- no marker at all, can't reach here
+        # anyway since done_covers() already required one; or {} -- 1-go's
+        # own pre-D119/pre-leaf_child_z legacy markers) defers entirely to
+        # done_covers()'s own already-correct legacy handling above,
+        # unchanged -- 1-go predates both this field and the whole
+        # upsampling feature, and its generation_id will never appear in
+        # LAND_UPSAMPLE_ZOOM_BY_GENERATION. For any REAL manifest, also
+        # require its recorded leaf_child_z to still match utils.leaf_
+        # child_z()'s current prediction before trusting it as done.
+        done_manifest = utils.read_done_manifest(done_path)
+        if not done_manifest or done_manifest.get('leaf_child_z') == utils.leaf_child_z(aggregation_id, z, x, y):
+            print(f'Aggregation item {item} already done. Skipping...')
+            return
     print(f'{item} start')
     tmp_folder = f'tmp-store/{aggregation_id}/{item}'
     os.makedirs(tmp_folder, exist_ok=True)

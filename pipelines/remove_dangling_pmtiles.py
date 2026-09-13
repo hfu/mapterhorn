@@ -28,6 +28,7 @@ Usage:
   uv run python3 remove_dangling_pmtiles.py <generation_id> --delete   # actually remove
 """
 import argparse
+import json
 import os
 from glob import glob
 
@@ -66,6 +67,22 @@ def find_dangling(generation_id):
         filename = filepath.split('/')[-1]
         expected_pmtiles_filenames.add(filename.replace('-downsampling.csv', '.pmtiles'))
 
+    # D166 Opus code review finding #4: lineage_extend_low_zoom.py's own
+    # zoom range is NOT fixed (LINEAGE_EXTEND_SOURCE_ZOOM/_TARGET_ZOOM env
+    # vars, defaults 8/4) -- a prior version of this exception hardcoded
+    # `< 8`, matching only the default. Read that script's own `.done`
+    # marker (which already records the exact source_zoom/target_zoom it
+    # ran with) instead of assuming the default ever applied. Absent
+    # entirely if lineage_extend_low_zoom.py was never run for this
+    # generation -- lineage_extend_low_zoom_source_zoom stays None, so the
+    # exception below never fires and every 0-0-0-* file is judged on the
+    # ordinary expected-filenames set like anything else.
+    lineage_extend_done_path = f'pmtiles-store/downsampling/lineage/{generation_id}/lineage-extend-low-zoom.done'
+    lineage_extend_low_zoom_source_zoom = None
+    if os.path.isfile(lineage_extend_done_path):
+        with open(lineage_extend_done_path) as f:
+            lineage_extend_low_zoom_source_zoom = json.load(f)['source_zoom']
+
     dangling = []
     present = 0
     for layer in utils.LAYERS:
@@ -77,24 +94,24 @@ def find_dangling(generation_id):
                 filename = pmtiles_filepath.split('/')[-1]
                 if filename in expected_pmtiles_filenames:
                     continue
-                # D165/D166 (Opus design review finding #7): lineage_
-                # extend_low_zoom.py (D146) deliberately writes its own
-                # standalone 0-0-0-{4..7}.pmtiles nationwide-overview
-                # pyramid with NO covering CSV at all -- that script's
-                # whole point is extending lineage's pyramid below
-                # min_output_zoom=8 without touching downsampling_
-                # covering.py/downsampling_run.py. Neither of the two
-                # loops above can ever discover these (there is no
-                # covering to derive them from, by design), so without
-                # this explicit exception every run of this tool would
-                # flag the entire feature as dangling and --delete would
-                # remove it permanently. Narrow and principled: matches
-                # lineage_extend_low_zoom.py's own fixed LAYER/DATATYPE/
-                # position/zoom-range constants exactly, so it can never
-                # accidentally spare a genuinely-dangling file elsewhere.
+                # D165/D166 (Opus design review finding #7, hardening #4):
+                # lineage_extend_low_zoom.py (D146) deliberately writes its
+                # own standalone 0-0-0-{...}.pmtiles nationwide-overview
+                # pyramid with NO covering CSV at all -- that script's whole
+                # point is extending lineage's pyramid below min_output_
+                # zoom=8 without touching downsampling_covering.py/
+                # downsampling_run.py. Neither of the two loops above can
+                # ever discover these (there is no covering to derive them
+                # from, by design), so without this explicit exception
+                # every run of this tool would flag the entire feature as
+                # dangling and --delete would remove it permanently. Bound
+                # by that script's own recorded source_zoom (read above),
+                # not a hardcoded 8, since LINEAGE_EXTEND_SOURCE_ZOOM is a
+                # real env var, not a constant.
                 if (layer == 'downsampling' and datatype == 'lineage'
                         and filename.startswith('0-0-0-')
-                        and int(filename.replace('0-0-0-', '').replace('.pmtiles', '')) < 8):
+                        and lineage_extend_low_zoom_source_zoom is not None
+                        and int(filename.replace('0-0-0-', '').replace('.pmtiles', '')) < lineage_extend_low_zoom_source_zoom):
                     continue
                 dangling.append(pmtiles_filepath)
 

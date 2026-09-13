@@ -124,14 +124,29 @@ def main():
                     skipped_manifest_changed_since += 1
                     continue
                 new_entries = utils.aggregation_fingerprint_entries(csv_path, filename)
-                backfilled_md5 += 1
             else:
                 new_entries = manifest['inputs']
 
             if needs_leaf_child_z:
                 z, x, y, _planned_child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
                 leaf_child_z_value = utils.leaf_child_z(generation_id, z, x, y)
-                backfilled_leaf_child_z += 1
+                # D166 Opus code review finding #6: utils.leaf_child_z() is
+                # a policy-table prediction, not a verified fact -- it has
+                # no way to know whether THIS item was actually built
+                # before or after its generation was added to LAND_
+                # UPSAMPLE_ZOOM_BY_GENERATION (see aggregation_run.py's own
+                # D166 fix for that exact ordering hazard). Require the
+                # real pmtiles-store file at the predicted child_z to
+                # actually exist before trusting it -- the same "verify
+                # the referenced output actually exists" principle D57
+                # established for cross-generation reuse, applied here to
+                # a backfill that could otherwise stamp a manifest with a
+                # value nothing on disk supports.
+                real_out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype='elevation', generation_id=generation_id)
+                if not os.path.isfile(f'{real_out_folder}/{z}-{x}-{y}-{leaf_child_z_value}.pmtiles'):
+                    print(f'SKIPPING {filename}: predicted leaf_child_z={leaf_child_z_value} has no matching real pmtiles-store output -- refusing to backfill an unverified value')
+                    skipped_error += 1
+                    continue
             else:
                 leaf_child_z_value = manifest['leaf_child_z']
 
@@ -151,6 +166,18 @@ def main():
                         'backfill_note': 'D163/D165/D166: backfilled MD5 fingerprint and/or leaf_child_z for cross-generation reuse; no rebuild happened',
                     },
                 )
+            # D166 Opus code review finding #7: count as backfilled only
+            # after write_done_manifest() has actually succeeded (or, in
+            # dry-run mode, only once every check above has passed and
+            # nothing remains that could fail) -- the old code incremented
+            # before the write, so an I/O error (ENOSPC -- a real incident
+            # class here, D157) would land this same item in BOTH the
+            # backfilled and error counts, overstating how many manifests
+            # were actually repaired.
+            if needs_md5:
+                backfilled_md5 += 1
+            if needs_leaf_child_z:
+                backfilled_leaf_child_z += 1
         except Exception as e:
             # D164: one bad item (a missing source-catalog manifest, a
             # malformed covering CSV, a corrupt .done) must not abort the
