@@ -227,46 +227,75 @@ def try_reuse_from_previous_generation(filepath, filename, current_generation_id
     item can never silently strand every item after it in the sorted
     glob without a .todo OR a .done.
 
-    D164: the child_z used below to locate the previous generation's
-    output file is the covering filename's own PLANNED child_z, not a
-    freshly-recomputed one -- the same trust aggregation_tile.py's own
-    comment warns is unsafe once upsampling exists (D149/D150's
-    "1.6-go"). Safe here by construction, not by assumption: 2-go itself
-    performs no upsampling (planned == actual for every native item,
-    per aggregation_tile.py's own comment), and even if some future run
-    combined reuse with upsampling, a wrong guessed path simply fails
-    the os.path.isfile() check below and falls through to full
-    reprocessing -- never a silent wrong reuse.
+    D165/D166 CORRECTION to a claim D164's own docstring used to make
+    here: it used to say a wrong guessed output path under upsampling
+    "simply fails the os.path.isfile() check below ... never a silent
+    wrong reuse." That reasoning only covers the case where the
+    PREVIOUS generation was upsampled and the current one is not. The
+    actual 1.6-go direction is the opposite -- the CURRENT generation
+    upsamples land items, the previous one (1.5-go) did not -- and in
+    that direction the guessed path (parsed from filename, i.e. the
+    PLANNED/native child_z, which is what 1.5-go's own real output
+    actually used) resolves correctly, `os.path.isfile()` succeeds, and
+    every other check below (content + MD5 fingerprint) still matches
+    (upsampling changes NONE of the covering CSV's own fields). Without
+    the explicit leaf_child_z comparison added below, this would
+    silently copy 1.5-go's non-upsampled archive into 1.6-go under the
+    same (wrong, non-upsampled) filename and mark it done -- a real,
+    verified hazard (an Opus design review found ~93% of 1.6-go's own
+    target items sit at the macrotile_z floor, where even D149's own
+    granularity change can't make their filename differ from 1.5-go's),
+    not a hypothetical one.
     """
+    if os.environ.get('DISABLE_AGGREGATION_REUSE', '0') == '1':
+        return False
+
     last_filepath = f'aggregation-store/{last_generation_id}/{filename}'
     last_done_path = f'{last_filepath}.done'
     if not os.path.isfile(last_filepath) or not os.path.isfile(last_done_path):
         return False
 
-    # D164: done_covers()/done_is_current() both treat a legacy/empty
-    # manifest ({} -- pre-D119 touch files, or any unparseable JSON) as
-    # "covers elevation, always current" without ever comparing a
-    # fingerprint (see their own docstrings: "Legacy empty markers ...
-    # stay 'current' for elevation, deliberate: never churn 1-go"). That
-    # bypass is exactly the D18/D35 gap this whole mechanism exists to
-    # close -- reachable here if a future generation's immediate
-    # predecessor ever has a legacy/corrupt manifest (not true for
-    # 1.5-go, which this session backfilled with real fingerprints, but
-    # nothing structurally prevents it for some future generation pair).
-    # Require a real, fingerprint-bearing manifest before trusting
-    # anything it says.
-    if not utils.read_done_manifest(last_done_path):
+    # D164: done_covers() treats a legacy/empty manifest ({} -- pre-D119
+    # touch files, or any unparseable JSON) as "covers elevation" without
+    # ever comparing a fingerprint (see its own docstring: "Legacy empty
+    # markers ... stay 'current' for elevation, deliberate: never churn
+    # 1-go"). That bypass is exactly the D18/D35 gap this whole mechanism
+    # exists to close -- reachable here if a future generation's
+    # immediate predecessor ever has a legacy/corrupt manifest (not true
+    # for 1.5-go, which this session backfilled with real fingerprints,
+    # but nothing structurally prevents it for some future generation
+    # pair). Require a real, fingerprint-bearing manifest before trusting
+    # anything it says -- and keep the manifest itself, since D165/D166
+    # needs to read its own recorded leaf_child_z below, not just check
+    # truthiness.
+    last_manifest = utils.read_done_manifest(last_done_path)
+    if not last_manifest:
+        return False
+
+    z, x, y, _planned_child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
+
+    # D165/D166: the actual fix this function's own docstring describes
+    # -- reject reuse outright if the CURRENT generation's own target
+    # child_z for this position (utils.leaf_child_z(), which is 16 for a
+    # land item in a generation that upsamples, native otherwise) differs
+    # from what the PREVIOUS generation's manifest recorded actually
+    # producing. Cheap (two dict lookups once each generation's covering
+    # has been scanned), so checked before done_covers()/the per-file MD5
+    # fingerprint below. For every existing (non-upsampling) generation
+    # pair this is always a match, since leaf_child_z() returns the
+    # covering filename's own native value for both sides -- byte-
+    # identical behavior to before this check existed.
+    current_child_z = utils.leaf_child_z(current_generation_id, z, x, y)
+    if last_manifest.get('leaf_child_z') != current_child_z:
         return False
 
     if not utils.done_covers(last_done_path, REQUIRED_DATATYPES):
         return False
 
-    z, x, y, child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
-
     last_out_paths = {}
     for datatype in REQUIRED_DATATYPES:
         last_out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype=datatype, generation_id=last_generation_id)
-        last_out_path = f'{last_out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
+        last_out_path = f'{last_out_folder}/{z}-{x}-{y}-{current_child_z}.pmtiles'
         if not os.path.isfile(last_out_path):
             return False
         last_out_paths[datatype] = last_out_path
@@ -280,14 +309,14 @@ def try_reuse_from_previous_generation(filepath, filename, current_generation_id
     for datatype, last_out_path in last_out_paths.items():
         current_out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype=datatype, generation_id=current_generation_id)
         utils.create_folder(current_out_folder)
-        shutil.copy2(last_out_path, f'{current_out_folder}/{z}-{x}-{y}-{child_z}.pmtiles')
+        shutil.copy2(last_out_path, f'{current_out_folder}/{z}-{x}-{y}-{current_child_z}.pmtiles')
 
     utils.write_done_manifest(
         f'{filepath}.done',
         datatypes=REQUIRED_DATATYPES,
         generation_id=current_generation_id,
         entries=current_entries,
-        extra={'reused_from_generation_id': last_generation_id},
+        extra={'reused_from_generation_id': last_generation_id, 'leaf_child_z': current_child_z},
     )
     return True
 

@@ -311,6 +311,102 @@ def get_required_datatypes():
 # subtree. See PLAN.md section 0 for the generation_id <-> label table.
 FLAT_LEGACY_GENERATION_ID = '01M0MWK852631SHCHPA66F21WQ'
 
+# --- 1.6-go land-area maxzoom upsampling (mapterhorn-japan-bridge
+# DECISIONS1.md D149-D151/D166, design finalized 2026-09-13 after an
+# Opus review found the original design's two proposed fixes would
+# have been actively harmful -- see D166 for the full history) ---
+#
+# LAND_UPSAMPLE_ZOOM_BY_GENERATION deliberately keys the "does this
+# generation upsample land items, and to what zoom" policy by
+# generation_id, the same pattern FLAT_LEGACY_GENERATION_ID above
+# already uses. This is NOT a stylistic choice: whether a leaf's
+# EFFECTIVE child_z differs from its covering CSV's own (native)
+# filename value is a per-GENERATION policy decision, not something
+# derivable from a covering's own content alone -- the exact same
+# covering (same source files, same native maxzoom) must resolve to
+# its native child_z for 1-go/1.5-go (built before this feature
+# existed) and to the upsampled target for 1.6-go (built with it
+# active). A global on/off switch (an env var, a module-level constant)
+# would get this right for whichever generation is currently being
+# built, but wrong for every OTHER generation anyone later reads
+# without remembering to flip it back -- exactly the kind of config-
+# drift bug this project has been bitten by before (worker-count env
+# vars, EMIT_LINEAGE). Keying by generation_id makes the policy a fact
+# about the DATA, permanently, regardless of what env vars happen to
+# be set when some later tool reads it.
+#
+# Empty until 1.6-go's own generation_id is actually minted (see
+# PLAN.md section 0's generation table) -- add it here, alongside the
+# target zoom, before that generation's own aggregation_covering.py/
+# aggregation_run.py run for real. Never remove a generation's entry
+# once added, even after that generation is superseded -- anything
+# that later reads 1.6-go's own aggregation-store (an audit tool, a
+# repair script) still needs this to resolve child_z correctly.
+LAND_UPSAMPLE_ZOOM_BY_GENERATION = {}
+
+def get_land_upsample_target_zoom(generation_id):
+    """None if this generation doesn't upsample land items at all (every
+    generation before 1.6-go); otherwise the target zoom land items are
+    upsampled to (16, as designed) for this specific generation."""
+    return LAND_UPSAMPLE_ZOOM_BY_GENERATION.get(generation_id)
+
+def is_land_item_covering(filepath):
+    """True if this *-aggregation.csv covering references any source
+    other than jpnationalsea -- the same "not sea-only" predicate
+    D149's design settled on (open ocean gets no value from 1m detail).
+    Reused by every place that needs to know whether an item is a
+    1.6-go upsampling candidate: aggregation_reproject.py's own warp
+    target, leaf_child_z() below, and remove_dangling_pmtiles.py's
+    expected-output-filename set -- deliberately ONE function so these
+    can't drift apart the way D149's own scattered notes never named a
+    single shared predicate to call."""
+    return any(source != 'jpnationalsea' for source, _filename, _maxzoom in read_aggregation_csv_rows(filepath))
+
+_LEAF_CHILD_Z_CACHE = {}
+
+def get_leaf_child_z_map(aggregation_id):
+    """{(z, x, y): effective_child_z} for every native aggregation leaf
+    in this generation -- "effective" meaning the REAL child_z this
+    leaf's own pmtiles-store output actually has (or will have), which
+    only differs from the covering CSV filename's own (native/planned)
+    child_z for a land item in a generation that upsamples (see
+    LAND_UPSAMPLE_ZOOM_BY_GENERATION above). Memoized per process
+    (mirrors _SOURCE_MD5_CACHE's own reasoning: this project's
+    multiprocessing.Pool workers each pay this cost once, not once
+    truly-shared, which is the established and accepted pattern here).
+
+    Deliberately a pure function of the covering CSV's own content plus
+    this static per-generation policy table -- NOT a scan of real
+    pmtiles-store output files. An Opus design review (D166) found that
+    scanning real files would make downsampling_covering.py's own plan
+    silently incomplete for any leaf aggregation_run.py hasn't finished
+    yet (instead of DOWNSAMPLING_STRICT loudly catching a real missing
+    child, as it does today), and would leave stale downsampling
+    outputs behind whenever a position's effective child_z changes
+    between covering runs into the same generation. A pure function of
+    the covering plus a static policy table has neither problem: the
+    plan is always complete and deterministic the moment coverings
+    exist, independent of build progress."""
+    if aggregation_id in _LEAF_CHILD_Z_CACHE:
+        return _LEAF_CHILD_Z_CACHE[aggregation_id]
+    target_zoom = get_land_upsample_target_zoom(aggregation_id)
+    mapping = {}
+    for filepath in glob(f'aggregation-store/{aggregation_id}/*-aggregation.csv'):
+        filename = filepath.split('/')[-1]
+        z, x, y, native_child_z = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
+        effective_child_z = native_child_z
+        if target_zoom is not None and is_land_item_covering(filepath):
+            effective_child_z = target_zoom
+        mapping[(z, x, y)] = effective_child_z
+    _LEAF_CHILD_Z_CACHE[aggregation_id] = mapping
+    return mapping
+
+def leaf_child_z(aggregation_id, z, x, y):
+    """The effective (real) child_z of the native aggregation leaf at
+    this exact position, or None if no leaf exists there at all (a
+    downsampling-only position)."""
+    return get_leaf_child_z_map(aggregation_id).get((z, x, y))
+
 def get_pmtiles_folder(x, y, z, layer, datatype='elevation', generation_id=None):
     """mapterhorn-japan-bridge DECISIONS.md D95/D107 (+ generation_id,
     2026-09-04): pmtiles-store is split by `layer` (aggregation leaf
@@ -373,18 +469,36 @@ def resolve_layer(aggregation_id, z, x, y, child_z):
     named `{z}-{x}-{y}-{child_z}.pmtiles`? downsampling_covering.py's
     write_downsampling_items() writes downsampling.csv coverings whose
     own {z}-{x}-{y}-{child_z} fields can coincide with a *native*
-    aggregation.csv covering at the same quadruple (the pyramid is
-    recursive: a downsampling item at zoom Z can itself be listed as a
-    "child" of a downsampling item at zoom Z-1) -- so a referenced
-    child filename alone never tells you which layer wrote it. The
-    matching covering CSV does: aggregation_covering.py writes exactly
-    one *-aggregation.csv per native leaf position; if one exists for
-    this exact quadruple, this position is a leaf (aggregation layer),
-    otherwise it was produced by downsampling_run.py consuming a
-    *-downsampling.csv at this same quadruple (downsampling layer).
-    """
-    agg_csv = f'aggregation-store/{aggregation_id}/{z}-{x}-{y}-{child_z}-aggregation.csv'
-    return 'aggregation' if os.path.isfile(agg_csv) else 'downsampling'
+    aggregation.csv covering at the same (z,x,y) position but a
+    DIFFERENT child_z (the pyramid is recursive: an overview built from
+    a deep leaf keeps that leaf's own (z,x,y) as its extent tile at
+    several shallower zooms in a row -- confirmed on real 1.5-go data,
+    3,344 of 6,373 positions carry both a leaf and one or more
+    overviews at the same (z,x,y)) -- so neither a referenced child
+    filename NOR a bare "does (z,x,y) have any aggregation.csv at all"
+    check tells you which layer wrote a specific child_z.
+
+    D165/D166 (2026-09-13): this used to check for an EXACT filename
+    match (`{z}-{x}-{y}-{child_z}-aggregation.csv`), which broke the
+    moment leaf_child_z() below could differ from a covering's own
+    filename (1.6-go's land-upsampling). The FIRST attempted fix
+    (matching by (z,x,y) position alone, ignoring child_z) was verified
+    against real 1.5-go data to flip 49.9% of all real child references
+    (7,226/14,489) -- it would have broken the downsampling pyramid for
+    every generation, upsampling or not, by conflating "a leaf exists at
+    this position" with "child_z belongs to that leaf" when the 3,344
+    positions above prove those are different questions. The correct
+    fix compares child_z against the leaf's own EFFECTIVE child_z
+    (leaf_child_z() -- native for every existing generation, upsampled
+    for a land item in a generation that upsamples): a match means this
+    exact child_z is the leaf itself (aggregation layer); anything else
+    at this position (including a DIFFERENT child_z, e.g. an overview
+    sitting at the same (z,x,y) as its own leaf) is downsampling.
+    Behavior is byte-identical to the old exact-filename-match check
+    for every generation not in LAND_UPSAMPLE_ZOOM_BY_GENERATION, since
+    leaf_child_z() there always returns the covering filename's own
+    native value."""
+    return 'aggregation' if leaf_child_z(aggregation_id, z, x, y) == child_z else 'downsampling'
 
 # --- .done manifest machinery (mapterhorn-japan-bridge DECISIONS.md D119
 # P2.B design + D120 Fable review item #6, implemented 2026-09-04) ---

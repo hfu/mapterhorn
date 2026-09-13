@@ -39,15 +39,32 @@ def find_dangling(generation_id):
     if not os.path.isdir(agg_dir):
         raise SystemExit(f'no such generation: {agg_dir} does not exist')
 
-    filepaths = glob(f'{agg_dir}/*-aggregation.csv')
-    filepaths += glob(f'{agg_dir}/*-downsampling.csv')
-
     expected_pmtiles_filenames = set()
-    for filepath in filepaths:
+
+    # D165/D166 (1.6-go land-area upsampling): an aggregation LEAF's real
+    # output filename uses its EFFECTIVE child_z (utils.leaf_child_z()),
+    # not the covering CSV filename's own native/planned one -- those
+    # differ for a land item in a generation that upsamples. The original
+    # naive `filename.replace('-aggregation.csv', '.pmtiles')` kept the
+    # stale native value, which would have classified every upsampled
+    # leaf (elevation AND lineage) as "not expected" -- i.e. dangling --
+    # and --delete would have removed the entire feature this generation
+    # exists to add. Verified this matters: leaf_child_z() differs from
+    # the naive substitution for exactly the land items a generation in
+    # LAND_UPSAMPLE_ZOOM_BY_GENERATION upsamples, and is identical to it
+    # for every other generation (leaf_child_z() returns the covering
+    # filename's own native value there), so this is a pure correctness
+    # fix with no behavior change for any existing generation.
+    for (leaf_z, leaf_x, leaf_y), effective_child_z in utils.get_leaf_child_z_map(generation_id).items():
+        expected_pmtiles_filenames.add(f'{leaf_z}-{leaf_x}-{leaf_y}-{effective_child_z}.pmtiles')
+
+    # *-downsampling.csv filenames are entirely under downsampling_
+    # covering.py's own control within this same generation, self-
+    # consistent with their own real output by construction -- unaffected
+    # by upsampling, naive substitution remains correct.
+    for filepath in glob(f'{agg_dir}/*-downsampling.csv'):
         filename = filepath.split('/')[-1]
-        expected_pmtiles_filenames.add(
-            filename.replace('-aggregation.csv', '.pmtiles')
-                    .replace('-downsampling.csv', '.pmtiles'))
+        expected_pmtiles_filenames.add(filename.replace('-downsampling.csv', '.pmtiles'))
 
     dangling = []
     present = 0
@@ -57,8 +74,29 @@ def find_dangling(generation_id):
             for pmtiles_filepath in sorted(
                     glob(f'{root}/*.pmtiles') + glob(f'{root}/*/*.pmtiles')):
                 present += 1
-                if pmtiles_filepath.split('/')[-1] not in expected_pmtiles_filenames:
-                    dangling.append(pmtiles_filepath)
+                filename = pmtiles_filepath.split('/')[-1]
+                if filename in expected_pmtiles_filenames:
+                    continue
+                # D165/D166 (Opus design review finding #7): lineage_
+                # extend_low_zoom.py (D146) deliberately writes its own
+                # standalone 0-0-0-{4..7}.pmtiles nationwide-overview
+                # pyramid with NO covering CSV at all -- that script's
+                # whole point is extending lineage's pyramid below
+                # min_output_zoom=8 without touching downsampling_
+                # covering.py/downsampling_run.py. Neither of the two
+                # loops above can ever discover these (there is no
+                # covering to derive them from, by design), so without
+                # this explicit exception every run of this tool would
+                # flag the entire feature as dangling and --delete would
+                # remove it permanently. Narrow and principled: matches
+                # lineage_extend_low_zoom.py's own fixed LAYER/DATATYPE/
+                # position/zoom-range constants exactly, so it can never
+                # accidentally spare a genuinely-dangling file elsewhere.
+                if (layer == 'downsampling' and datatype == 'lineage'
+                        and filename.startswith('0-0-0-')
+                        and int(filename.replace('0-0-0-', '').replace('.pmtiles', '')) < 8):
+                    continue
+                dangling.append(pmtiles_filepath)
 
     print(f'generation: {generation_id}')
     print(f'num expected filenames (from covering CSVs): {len(expected_pmtiles_filenames)}')

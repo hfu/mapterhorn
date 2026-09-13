@@ -86,6 +86,12 @@ def main(x, y, z, child_z, category_data, buffer_pixels, tmp_folder, aggregation
     out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype='lineage', generation_id=aggregation_id)
     utils.create_folder(out_folder)
     real_child_z = create_lineage_tiles(blocks_folder, aggregation_tile, category_data, buffer_pixels)
+    # D165/D166: same safety-net assert as aggregation_tile.py's own
+    # main() -- see that one's own comment for the full reasoning.
+    expected_child_z = utils.leaf_child_z(aggregation_id, z, x, y)
+    assert real_child_z == expected_child_z, (
+        f'{z}-{x}-{y}: real child_z {real_child_z} from category_data '
+        f'does not match utils.leaf_child_z() prediction {expected_child_z}')
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{real_child_z}.pmtiles'
     # Same stale prior-run cleanup as aggregation_tile.py's own elevation
     # path, scoped to the lineage datatype's own generation-scoped

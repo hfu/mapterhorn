@@ -6,13 +6,47 @@ import mercantile
 import utils
 
 def get_extents_from_coverings(aggregation_id, zoom):
+    """Everything that "exists" at exactly `zoom`, from two sources:
+
+    1. *-downsampling.csv coverings from a DEEPER pass of this same
+       write_downsampling_items() run (the recursive part of the
+       pyramid: this script's own output, written earlier in the same
+       call, one zoom shallower each time). These filenames are
+       entirely self-consistent by construction -- unaffected by
+       upsampling -- so matching them by filename is still correct.
+    2. Native aggregation LEAVES whose real, EFFECTIVE child_z (D165/
+       D166's utils.leaf_child_z(), NOT the covering CSV filename's own
+       native/planned child_z) equals `zoom`.
+
+    D165/D166 (2026-09-13): the original single glob here
+    (`*-*-*-{zoom}-*.csv`, matching both file kinds by filename alone)
+    is exactly why 1.6-go's upsampled z14-z16 leaves were silently
+    invisible to the whole downsampling pyramid -- their covering CSV
+    stays named with the native (pre-upsample) child_z forever, by
+    design (D163/D164's dirty-tracking and cross-generation reuse both
+    need that filename to keep meaning "this recipe", not "this real
+    output zoom"). An earlier draft of this fix ADDED a real-file scan
+    alongside the untouched old glob rather than replacing the leaf
+    half of it -- an Opus design review (D166) caught that this would
+    have double-counted every upsampled leaf (once at its real zoom via
+    the new scan, once at its stale native zoom via the old glob),
+    producing a *-downsampling.csv referencing a *.pmtiles filename
+    that will never exist. Splitting into these two explicit sources,
+    with the leaf half computed from leaf_child_z() rather than a
+    filename match, is what avoids that: each leaf contributes to
+    exactly one zoom, its real one."""
     extents = []
-    filepaths = glob(f'aggregation-store/{aggregation_id}/*-*-*-{zoom}-*.csv')
-    for filepath in filepaths:
+
+    for filepath in glob(f'aggregation-store/{aggregation_id}/*-*-*-{zoom}-downsampling.csv'):
         filename = filepath.split('/')[-1]
-        parts = filename.replace('.csv', '').split('-')
-        extent_z, extent_x, extent_y = [int(a) for a in parts[:3]]
+        parts = filename.replace('-downsampling.csv', '').split('-')
+        extent_z, extent_x, extent_y, _extent_child_z = [int(a) for a in parts]
         extents.append(mercantile.Tile(x=extent_x, y=extent_y, z=extent_z))
+
+    for (leaf_z, leaf_x, leaf_y), effective_child_z in utils.get_leaf_child_z_map(aggregation_id).items():
+        if effective_child_z == zoom:
+            extents.append(mercantile.Tile(x=leaf_x, y=leaf_y, z=leaf_z))
+
     return extents
 
 def get_tile_to_extent_map(extents, zoom):

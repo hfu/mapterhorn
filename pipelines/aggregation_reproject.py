@@ -92,9 +92,10 @@ def contains_nodata_pixels(filepath):
 
 def reproject(filepath, tmp_folder):
     filename = filepath.split('/')[-1]
+    aggregation_id = filepath.split('/')[-2]
 
     z, x, y, _ = [int(a) for a in filename.replace('-aggregation.csv', '').split('-')]
-    
+
     aggregation_tile = mercantile.Tile(x=x, y=y, z=z)
 
     metadata_filepath = f'{tmp_folder}/reprojection.json'
@@ -104,6 +105,23 @@ def reproject(filepath, tmp_folder):
 
     grouped_source_items = utils.get_grouped_source_items(filepath)
     maxzoom = grouped_source_items[0][0]['maxzoom']
+
+    # D165/D166 (1.6-go land-area maxzoom upsampling): whether to
+    # upsample at all, and to what zoom, is a per-GENERATION policy
+    # (utils.LAND_UPSAMPLE_ZOOM_BY_GENERATION -- see that table's own
+    # docstring for why this can't be a per-item decision derived from
+    # the covering alone). `target_zoom > maxzoom` guards against ever
+    # downsampling an item whose native resolution already exceeds the
+    # target (e.g. an existing z16 land item) -- this only ever raises
+    # zoom, never lowers it. Ocean-only items are deliberately excluded
+    # (D149: no value in 1m detail on open seafloor) via is_land_item_
+    # covering(). gdalwarp's own `-r cubicspline` (used by create_warp()
+    # below, unconditionally) already supports upsampling -- no new warp
+    # code needed, just a different target zoom fed into it.
+    target_zoom = utils.get_land_upsample_target_zoom(aggregation_id)
+    if target_zoom is not None and target_zoom > maxzoom and utils.is_land_item_covering(filepath):
+        maxzoom = target_zoom
+
     resolution = get_resolution(maxzoom)
 
     buffer_pixels = 0

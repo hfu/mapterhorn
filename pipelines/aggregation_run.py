@@ -154,11 +154,25 @@ def run(filepath):
     # comparison always fail; see that helper's own docstring) --
     # consolidates what used to be hand-built separately here, in
     # aggregation_covering.py's reuse check, and in the backfill script.
+    # D165/D166 (1.6-go): record this item's own effective (real) child_z
+    # in the manifest so a LATER generation's cross-generation reuse check
+    # (aggregation_covering.py's try_reuse_from_previous_generation())
+    # can tell whether ITS OWN target for this same position differs from
+    # what THIS generation actually produced -- e.g. this generation built
+    # a land item at its native (non-upsampled) zoom, but the next
+    # generation upsamples land items to z16. Without this recorded value,
+    # reuse would trust the covering-CSV-content fingerprint alone (which
+    # upsampling doesn't change at all -- same source files, same MD5s)
+    # and silently copy forward a NON-upsampled archive into a generation
+    # that was supposed to upsample it, defeating 1.6-go for most of the
+    # positions it exists to fix. See utils.leaf_child_z()'s own docstring.
+    z, x, y, _planned_child_z = [int(a) for a in item.split('-')]
     utils.write_done_manifest(
         done_path,
         datatypes=required_datatypes,
         generation_id=aggregation_id,
         entries=utils.aggregation_fingerprint_entries(filepath, filename),
+        extra={'leaf_child_z': utils.leaf_child_z(aggregation_id, z, x, y)},
     )
     try:
         os.remove(f'{filepath}.todo')

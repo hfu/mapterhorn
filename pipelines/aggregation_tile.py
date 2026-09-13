@@ -112,6 +112,22 @@ def main(filepath, tmp_folder):
     out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', generation_id=aggregation_id)
     utils.create_folder(out_folder)
     child_z = create_tiles(tmp_folder, aggregation_tile, tiff_filepath, buffer_pixels)
+    # D165/D166: the real, raster-derived child_z must always equal what
+    # utils.leaf_child_z() (a pure function of the covering CSV plus the
+    # per-generation upsampling policy) predicts for this exact position
+    # -- this is the one place the actual raster is ground truth, and the
+    # safety net for the whole 1.6-go design: if aggregation_reproject.py's
+    # own target-zoom logic and utils.leaf_child_z()'s prediction of it
+    # ever disagree (a bug in either), every downstream consumer that
+    # trusts leaf_child_z() (resolve_layer(), downsampling_covering.py's
+    # own pyramid discovery, the D163/D164 reuse fingerprint) would
+    # silently misresolve this position -- fail loudly here instead.
+    expected_child_z = utils.leaf_child_z(aggregation_id, z, x, y)
+    assert child_z == expected_child_z, (
+        f'{filename}: real child_z {child_z} from the reprojected raster '
+        f'does not match utils.leaf_child_z() prediction {expected_child_z} '
+        f'-- aggregation_reproject.py and utils.leaf_child_z() disagree '
+        f'about this position\'s target zoom')
     out_filepath = f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles'
     # Remove stale prior-RUN output at this exact macrotile position (same
     # z-x-y, different child_z -- a position's maxzoom can change when its
