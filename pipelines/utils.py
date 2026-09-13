@@ -335,14 +335,19 @@ FLAT_LEGACY_GENERATION_ID = '01M0MWK852631SHCHPA66F21WQ'
 # about the DATA, permanently, regardless of what env vars happen to
 # be set when some later tool reads it.
 #
-# Empty until 1.6-go's own generation_id is actually minted (see
-# PLAN.md section 0's generation table) -- add it here, alongside the
-# target zoom, before that generation's own aggregation_covering.py/
-# aggregation_run.py run for real. Never remove a generation's entry
-# once added, even after that generation is superseded -- anything
-# that later reads 1.6-go's own aggregation-store (an audit tool, a
-# repair script) still needs this to resolve child_z correctly.
-LAND_UPSAMPLE_ZOOM_BY_GENERATION = {}
+# 1.6-go's own generation_id, minted 2026-09-14 (mapterhorn-japan-bridge
+# PLAN.md section 0, DECISIONS1.md D167's own "what's next" item #1) --
+# added here in the SAME commit as the ID's own minting, per D166 code
+# review finding #3's own discipline (adding the table entry AFTER any
+# aggregation_run.py work has started for this generation would silently
+# leave already-built items permanently un-upsampled). Never remove a
+# generation's entry once added, even after that generation is
+# superseded -- anything that later reads 1.6-go's own aggregation-store
+# (an audit tool, a repair script) still needs this to resolve child_z
+# correctly.
+LAND_UPSAMPLE_ZOOM_BY_GENERATION = {
+    '01M2EAPPYXT8RWNC6TXBRT36JE': 16,  # 1.6-go
+}
 
 def get_land_upsample_target_zoom(generation_id):
     """None if this generation doesn't upsample land items at all (every
