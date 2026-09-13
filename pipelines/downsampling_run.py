@@ -484,7 +484,14 @@ def main(filepaths):
             out_filepath = f'{out_folder}/{extent_z}-{extent_x}-{extent_y}-{parent_zoom}.pmtiles'
 
             extent = mercantile.Tile(x=extent_x, y=extent_y, z=extent_z)
-            tmp_folder = filepath.replace('-downsampling.csv', '-tmp')
+            # D165 #8: scope by datatype -- this is the one shared path in the
+            # D107 datatype-separation restructure that wasn't. Without the
+            # datatype suffix, an elevation pass and a lineage pass over the
+            # same generation write identically-named parent .webp files into
+            # the same directory if ever run concurrently (nothing else here
+            # prevents that; only the CLAUDE.md runbook's "one at a time"
+            # convention did).
+            tmp_folder = filepath.replace('-downsampling.csv', f'-{DOWNSAMPLING_DATATYPE}-tmp')
 
             pmtiles_filenames = None
             with open(filepath) as f:
@@ -514,11 +521,22 @@ def main(filepaths):
             # absence left 949/8,223 overviews stale in 1-go's published
             # archive). Legacy empty markers stay valid for elevation.
             done_path = utils.downsampling_done_path(filepath, DOWNSAMPLING_DATATYPE)
-            if utils.done_is_current(done_path, [DOWNSAMPLING_DATATYPE], input_entries):
+            # D165 #5: the manifest records this item's own output path
+            # (`extra={'output': out_filepath}` below) but nothing ever
+            # read it back -- done_is_current() alone certifies "inputs
+            # unchanged", not "the output file this marker claims to
+            # certify is still actually there" (a manually deleted or
+            # corrupted pmtiles-store file would otherwise be trusted
+            # forever). Same shape as aggregation_run.py's own #3 fix.
+            output_exists = os.path.isfile(out_filepath)
+            if utils.done_is_current(done_path, [DOWNSAMPLING_DATATYPE], input_entries) and output_exists:
                 print('already done (and inputs unchanged)...')
                 continue
             if utils.done_covers(done_path, [DOWNSAMPLING_DATATYPE]):
-                print('done marker exists but inputs changed -- rebuilding stale overview (D119).')
+                if not output_exists:
+                    print('done marker exists but output file missing -- rebuilding (D165 #5).')
+                else:
+                    print('done marker exists but inputs changed -- rebuilding stale overview (D119).')
 
             utils.create_folder(tmp_folder)
 

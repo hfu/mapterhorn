@@ -174,11 +174,64 @@ def write_aggregation_items(macrotile_map, aggregation_tiles, aggregation_id):
                     )))
                     child_z = max(child_z, source_item['maxzoom'])
         if len(line_tuples) == 0:
+            # D165 #10 secondary note (Opus code review, 2026-09-13): a
+            # position that HAD a covering CSV from an earlier pass into
+            # this same generation but has zero source coverage now (all
+            # its sources were removed/relocated in source-store/ since)
+            # would otherwise keep that stale file forever -- no duplicate-
+            # position hazard (its own child_z never changes once it drops
+            # to zero coverage), but it leaves remove_dangling_pmtiles.py
+            # expecting an output that will never be rebuilt, and a stray
+            # .todo referencing now-missing source files that would only
+            # fail loudly at reproject time rather than being recognized
+            # as simply obsolete. Clean it up the same way as the change-
+            # of-child_z case just below.
+            for stale_filepath in glob(f'{folder}/{aggregation_tile.z}-{aggregation_tile.x}-{aggregation_tile.y}-*-aggregation.csv*'):
+                os.remove(stale_filepath)
             continue
         line_tuples = sorted(list(line_tuples))
         for line_tuple in line_tuples:
             lines.append(f'{",".join(line_tuple)}\n')
-        with open(f'{folder}/{aggregation_tile.z}-{aggregation_tile.x}-{aggregation_tile.y}-{child_z}-aggregation.csv', 'w') as f:
+        out_filepath = f'{folder}/{aggregation_tile.z}-{aggregation_tile.x}-{aggregation_tile.y}-{child_z}-aggregation.csv'
+
+        # D165 #10: this function can be re-run against an EXISTING
+        # generation_id (main()'s own AGGREGATION_ID override -- e.g. to
+        # re-plan after new source data lands mid-generation, 2号's own
+        # documented risk). If this position's source composition changed
+        # since the last such pass, its child_z (baked into the filename)
+        # can differ, leaving the OLD covering CSV (plus its own .todo/
+        # .done markers) on disk alongside the new one -- two aggregation
+        # items claiming the same (z,x,y) position. get_leaf_child_z_map()
+        # (D166 Opus code review finding #2) now raises loudly on exactly
+        # this rather than silently picking one, but a loud crash mid-
+        # generation is worse than never creating the duplicate. Remove
+        # every stale file at this position (the .csv itself under its old
+        # name, and any .todo/.done/.tmp-* stub of it) before writing the
+        # current one -- mirrors aggregation_tile.py's own same-position
+        # stale-output cleanup one layer down, and downsampling_covering.py's
+        # sibling wholesale-delete-then-rewrite for the same reason.
+        #
+        # CRITICAL: must exempt out_filepath's OWN sidecars too, not just
+        # out_filepath itself -- caught by an Opus code review before this
+        # ever ran for real (2026-09-13). The glob below also matches
+        # `{out_filepath}.done`/`{out_filepath}.todo` (they start with
+        # out_filepath and `*-aggregation.csv*`'s trailing `*` swallows the
+        # rest), so the naive `!= out_filepath` guard alone deleted the
+        # CURRENT item's own completion marker on every re-run -- including
+        # a same-composition no-op re-run, or simply re-running after this
+        # script itself crashed partway through a previous pass. That would
+        # have silently discarded already-built items' D163/D164 fingerprint
+        # + leaf_child_z manifests generation-wide, forcing aggregation_run.py
+        # to treat them as never-done (no .done -> full national rebuild of
+        # already-complete work) and losing the exact data a LATER
+        # generation's cross-generation reuse depends on -- the opposite of
+        # this fix's whole purpose.
+        stale_glob = f'{folder}/{aggregation_tile.z}-{aggregation_tile.x}-{aggregation_tile.y}-*-aggregation.csv*'
+        for stale_filepath in glob(stale_glob):
+            if stale_filepath != out_filepath and not stale_filepath.startswith(f'{out_filepath}.'):
+                os.remove(stale_filepath)
+
+        with open(out_filepath, 'w') as f:
             f.writelines(lines)
 
 def try_reuse_from_previous_generation(filepath, filename, current_generation_id, last_generation_id):

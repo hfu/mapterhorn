@@ -121,34 +121,46 @@ def run(filepath):
     required_datatypes = utils.get_required_datatypes()
     done_path = f'{filepath}.done'
     z, x, y, _planned_child_z = [int(a) for a in item.split('-')]
-    # D166 Opus code review finding #3: done_covers() alone only checks
-    # datatype coverage, not whether this item's recorded leaf_child_z
-    # still matches utils.leaf_child_z()'s current prediction. Without
-    # this second check, adding a generation to LAND_UPSAMPLE_ZOOM_
-    # BY_GENERATION *after* some of its items were already built natively
-    # (a real risk: the policy table can only be keyed by a generation_id
-    # that already exists, so "mint ID, then configure the policy" is a
-    # tempting but unsafe order) would silently skip re-upsampling those
-    # already-.done items forever -- utils.leaf_child_z() would predict
-    # 16 for them from that point on, while their real pmtiles-store
-    # output and their own manifest's recorded leaf_child_z both still
-    # say native. A mismatch here forces a genuine rebuild instead of
-    # trusting a marker that no longer reflects the current policy --
-    # this is the within-generation twin of the cross-generation check
-    # aggregation_covering.py's try_reuse_from_previous_generation()
-    # already has.
-    if utils.done_covers(done_path, required_datatypes):
+    child_z = utils.leaf_child_z(aggregation_id, z, x, y)
+
+    def output_exists(datatype):
+        out_folder = utils.get_pmtiles_folder(x, y, z, layer='aggregation', datatype=datatype, generation_id=aggregation_id)
+        return os.path.isfile(f'{out_folder}/{z}-{x}-{y}-{child_z}.pmtiles')
+
+    # D165 #3 (combined with D166 Opus code review finding #3, already
+    # fixed below): the old check here was done_covers() alone, which only
+    # confirms the marker CLAIMS to certify required_datatypes -- it never
+    # compares against a freshly computed inputs fingerprint (the D18/D35
+    # "same filename, corrected content mid-run" scenario -- latent for
+    # 1.5-go, since audited live at 6,373/6,373 clean, but a real gap for
+    # 2-go, where a source file can legitimately land a correction after
+    # this item's own .done already exists) and never verifies the output
+    # file it claims to certify is actually still on disk (a manually
+    # deleted/corrupted pmtiles-store file, or a crash between merge and
+    # tile, would otherwise be trusted forever). Computing entries here
+    # unconditionally costs nothing new -- write_done_manifest() below
+    # needs the exact same value on the non-skip path, and downsampling_
+    # run.py's own equivalent check already pays this cost per item.
+    entries = utils.aggregation_fingerprint_entries(filepath, filename)
+    if utils.done_is_current(done_path, required_datatypes, entries) and all(output_exists(dt) for dt in required_datatypes):
         # `not done_manifest` (None -- no marker at all, can't reach here
-        # anyway since done_covers() already required one; or {} -- 1-go's
-        # own pre-D119/pre-leaf_child_z legacy markers) defers entirely to
-        # done_covers()'s own already-correct legacy handling above,
-        # unchanged -- 1-go predates both this field and the whole
-        # upsampling feature, and its generation_id will never appear in
-        # LAND_UPSAMPLE_ZOOM_BY_GENERATION. For any REAL manifest, also
-        # require its recorded leaf_child_z to still match utils.leaf_
-        # child_z()'s current prediction before trusting it as done.
+        # anyway since done_is_current() already required one; or {} --
+        # 1-go's own pre-D119/pre-leaf_child_z legacy markers) defers
+        # entirely to done_is_current()'s own already-correct legacy
+        # handling above, unchanged -- 1-go predates both this field and
+        # the whole upsampling feature, and its generation_id will never
+        # appear in LAND_UPSAMPLE_ZOOM_BY_GENERATION. For any REAL
+        # manifest, also require its recorded leaf_child_z to still match
+        # utils.leaf_child_z()'s current prediction before trusting it as
+        # done (D166 Opus code review finding #3: without this, adding a
+        # generation to LAND_UPSAMPLE_ZOOM_BY_GENERATION *after* some of
+        # its items were already built natively -- a real risk, since the
+        # policy table can only be keyed by a generation_id that already
+        # exists, making "mint ID, then configure the policy" a tempting
+        # but unsafe order -- would silently skip re-upsampling those
+        # already-.done items forever).
         done_manifest = utils.read_done_manifest(done_path)
-        if not done_manifest or done_manifest.get('leaf_child_z') == utils.leaf_child_z(aggregation_id, z, x, y):
+        if not done_manifest or done_manifest.get('leaf_child_z') == child_z:
             print(f'Aggregation item {item} already done. Skipping...')
             return
     print(f'{item} start')
@@ -194,13 +206,17 @@ def run(filepath):
     # and silently copy forward a NON-upsampled archive into a generation
     # that was supposed to upsample it, defeating 1.6-go for most of the
     # positions it exists to fix. See utils.leaf_child_z()'s own docstring.
-    z, x, y, _planned_child_z = [int(a) for a in item.split('-')]
+    # `entries`/`child_z` are the same ones computed at the top of this
+    # function for the resume check (D165 #3) -- reused rather than
+    # recomputed, since nothing this function does between there and here
+    # changes a source file's own content or the (static, import-time)
+    # upsampling policy table.
     utils.write_done_manifest(
         done_path,
         datatypes=required_datatypes,
         generation_id=aggregation_id,
-        entries=utils.aggregation_fingerprint_entries(filepath, filename),
-        extra={'leaf_child_z': utils.leaf_child_z(aggregation_id, z, x, y)},
+        entries=entries,
+        extra={'leaf_child_z': child_z},
     )
     try:
         os.remove(f'{filepath}.todo')

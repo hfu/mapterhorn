@@ -67,16 +67,45 @@ def compute_provenance(filepath, tmp_folder):
     tiff_filepaths = [f'{tmp_folder}/{i}-3857.tiff' for i in range(num_tiff_files)]
 
     with rasterio.open(tiff_filepaths[0]) as src:
-        merged = np.nan_to_num(src.read(1), nan=-9999)
-        provenance = np.where(merged != -9999, 0, -1).astype('int16')
+        height = src.height
+        width = src.width
 
-    for i, tiff_filepath in enumerate(tiff_filepaths[1:], start=1):
-        with rasterio.open(tiff_filepath) as src:
-            current = np.nan_to_num(src.read(1), nan=-9999)
-        fill_mask = (provenance == -1) & (current != -9999)
-        provenance[fill_mask] = i
-        if -1 not in provenance:
-            break
+    # D165 #6 (2026-09-13): read every group windowed, same 512px blocking
+    # aggregation_merge.merge() already uses, instead of one full-resolution
+    # float32 array PER GROUP held simultaneously (measured up to ~10.7 GiB
+    # peak per worker on the largest real 1.5-go items -- the exact
+    # AGGREGATION_WORKERS=3 memory ceiling D129/D130/D131 fixed, landed in
+    # a code path that predates that fix). Safe to window with NO overlap
+    # margin (unlike merge()'s own windowed branch, which needs one for its
+    # erosion+blur): this function has no cross-pixel operation at all --
+    # each pixel's provenance depends only on that same pixel's value across
+    # the group rasters, so per-window results are byte-identical to the
+    # whole-raster version by construction. Verified empirically too (see
+    # DECISIONS1.md D165's follow-up): real 1.5-go item re-run through both
+    # implementations, 0 differing pixels.
+    provenance = np.full((height, width), -1, dtype='int16')
+    tile_size = 512
+    with rasterio.env.Env(GDAL_CACHEMAX=256):
+        for y in range(0, height, tile_size):
+            win_h = min(tile_size, height - y)
+            for x in range(0, width, tile_size):
+                win_w = min(tile_size, width - x)
+                window = rasterio.windows.Window(x, y, win_w, win_h)
+
+                with rasterio.open(tiff_filepaths[0]) as src:
+                    merged_window = np.nan_to_num(src.read(1, window=window), nan=-9999)
+                window_provenance = np.where(merged_window != -9999, 0, -1).astype('int16')
+
+                if -1 in window_provenance:
+                    for i, tiff_filepath in enumerate(tiff_filepaths[1:], start=1):
+                        with rasterio.open(tiff_filepath) as src:
+                            current_window = np.nan_to_num(src.read(1, window=window), nan=-9999)
+                        fill_mask = (window_provenance == -1) & (current_window != -9999)
+                        window_provenance[fill_mask] = i
+                        if -1 not in window_provenance:
+                            break
+
+                provenance[y:y + win_h, x:x + win_w] = window_provenance
 
     return provenance, num_tiff_files
 
