@@ -372,6 +372,11 @@ FLAT_LEGACY_GENERATION_ID = '01M0MWK852631SHCHPA66F21WQ'
 # correctly.
 LAND_UPSAMPLE_ZOOM_BY_GENERATION = {
     '01M2EAPPYXT8RWNC6TXBRT36JE': 16,  # 1.6-go
+    '01M39W0T76QKN3GYJCPWX5MDHM': 16,  # 1.7-go (same source data as 1.6-go,
+    # D180's coastal-blur fix + D182's z13-z16 wall extension -- minted
+    # 2026-09-24, mapterhorn-japan-bridge DECISIONS1.md D183/D184; added
+    # here in the SAME commit as the ID's own minting, same discipline
+    # as 1.6-go's own entry above.
 }
 
 def get_land_upsample_target_zoom(generation_id):
