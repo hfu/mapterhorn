@@ -258,36 +258,79 @@ def merge(filepath, tmp_folder):
                             # macrotile_z = 12 (buffer_pixels 7 at z12).
                             blur_fits_in_overlap = truncate * sigma < overlap
 
-                            if boundary_tile.any() and blur_fits_in_overlap:
-                                boundary_tile_blurred = ndimage.gaussian_filter(boundary_tile.astype(float), sigma=sigma, truncate=truncate)
-                                boundary_tile_blurred /= (1.0 / (np.sqrt(2 * np.pi) * sigma))
-                                boundary_tile_blurred = np.clip(boundary_tile_blurred, 0, 1)
-                                boundary_tile_blurred = 3 * boundary_tile_blurred ** 2 - 2 * boundary_tile_blurred ** 3
-                                merged_tile_blurred = ndimage.gaussian_filter(merged_tile, sigma=sigma, truncate=truncate)
-                                merged_tile = boundary_tile_blurred * merged_tile_blurred + (1 - boundary_tile_blurred) * merged_tile
-                                # D165: a pixel the blur never touched at all
-                                # (boundary_tile_blurred == 0, i.e. outside
-                                # the gaussian kernel's reach from every
-                                # boundary) that was ALSO never covered by
-                                # any group is genuinely absent data, not a
-                                # flat 0m elevation -- restore -9999 there.
-                                # Pixels the blur DID reach (D114(B)'s own
-                                # coastal transition zone) are left exactly
-                                # as before: their blended value stands,
-                                # never overwritten back to -9999, so that
-                                # fix's smoothing is untouched.
-                                still_uncovered_mask = never_covered_mask & (boundary_tile_blurred == 0)
+                            # D180 (two independent Opus design reviews,
+                            # mapterhorn-japan-bridge DECISIONS1.md): split
+                            # boundary_tile by WHY the boundary exists,
+                            # instead of blurring every boundary pixel at the
+                            # same width. A boundary pixel adjacent to a
+                            # NEVER-COVERED pixel is D116's own case: that
+                            # neighbour is about to be zero-filled, so only a
+                            # full-width ramp avoids an impossible cliff --
+                            # unchanged sigma, unchanged behaviour. Every
+                            # other boundary pixel is a SEAM between two
+                            # groups that BOTH supplied real, measured data;
+                            # at z16 the buffer-derived sigma=30 blur there
+                            # was measured (real production data, D180)
+                            # destroying up to 102m of real 1m DEM1A detail
+                            # and stamping up to 48m of phantom land onto the
+                            # sea surface, to suppress seam steps (~2m/px)
+                            # far below what the winning 1m source itself
+                            # routinely contains (p99.9 ~8m/px). Capped via
+                            # utils.seam_blur_sigma_max -- see that
+                            # constant's own comment for the full reasoning.
+                            #
+                            # ndimage.binary_dilation uses the same default
+                            # cross structure binary_erosion (used to build
+                            # boundary_tile above) does, so "faces a
+                            # never-covered pixel" means the same thing in
+                            # both. Both blurred fields are computed from the
+                            # SAME pre-blur merged_tile, so that when
+                            # seam_boundary is empty (the common case: no
+                            # foreign-land-risk group actually left anything
+                            # unfilled) this reduces EXACTLY -- bitwise, not
+                            # approximately -- to the pre-D180 code path.
+                            # Verified against D116's own non-regression
+                            # case: bitwise identical, see DECISIONS1.md D180.
+                            if never_covered_mask.any():
+                                never_covered_boundary = boundary_tile & ndimage.binary_dilation(never_covered_mask)
                             else:
-                                # No blur ran at all -- either this whole
-                                # window was untouched by every group
-                                # (boundary_tile empty because there was no
-                                # valid pixel anywhere to erode a boundary
-                                # from), or the maxzoom<=11 guard skipped it
-                                # (never hit in practice, see that guard's
-                                # own comment). Either way, whatever never_
-                                # covered_mask marked is genuinely nodata
-                                # with no smoothing to preserve.
-                                still_uncovered_mask = never_covered_mask
+                                never_covered_boundary = np.zeros_like(boundary_tile)
+                            seam_boundary = boundary_tile & ~never_covered_boundary
+
+                            seam_sigma = min(utils.seam_blur_sigma_max, sigma)
+                            seam_fits_in_overlap = truncate * seam_sigma < overlap
+
+                            def _blend_weight(mask, s):
+                                w = ndimage.gaussian_filter(mask.astype(float), sigma=s, truncate=truncate)
+                                w /= (1.0 / (np.sqrt(2 * np.pi) * s))
+                                w = np.clip(w, 0, 1)
+                                return 3 * w ** 2 - 2 * w ** 3
+
+                            pre_blur_tile = merged_tile.copy()
+                            never_weight = None
+                            if never_covered_boundary.any() and blur_fits_in_overlap:
+                                never_weight = _blend_weight(never_covered_boundary, sigma)
+                                never_blurred = ndimage.gaussian_filter(pre_blur_tile, sigma=sigma, truncate=truncate)
+                                merged_tile = never_weight * never_blurred + (1 - never_weight) * merged_tile
+                            seam_weight = None
+                            if seam_boundary.any() and seam_fits_in_overlap:
+                                seam_weight = _blend_weight(seam_boundary, seam_sigma)
+                                seam_blurred = ndimage.gaussian_filter(pre_blur_tile, sigma=seam_sigma, truncate=truncate)
+                                merged_tile = seam_weight * seam_blurred + (1 - seam_weight) * merged_tile
+
+                            # D165: a pixel the blur never touched at all
+                            # (outside the gaussian kernel's reach from every
+                            # boundary) that was ALSO never covered by any
+                            # group is genuinely absent data, not a flat 0m
+                            # elevation -- restore -9999 there. Pixels either
+                            # blur DID reach are left exactly as blended,
+                            # never overwritten back to -9999.
+                            blur_reached = np.zeros(merged_tile.shape, dtype=bool)
+                            if never_weight is not None:
+                                blur_reached |= (never_weight > 0)
+                            if seam_weight is not None:
+                                blur_reached |= (seam_weight > 0)
+                            still_uncovered_mask = never_covered_mask & ~blur_reached
                             merged_tile[still_uncovered_mask] = -9999
 
                         crop_y_start = overlap if y > 0 else 0

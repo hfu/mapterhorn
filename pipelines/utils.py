@@ -35,6 +35,31 @@ from pmtiles.writer import Writer
 # unaffected); rgb/orthophoto mode keeps the 17 safety cap unchanged.
 macrotile_z = 12 if os.environ.get('TILE_ENCODING', 'terrarium') == 'terrarium' else 17
 macrotile_buffer_3857 = 150
+
+# D180 (mapterhorn-japan-bridge DECISIONS1.md): cap, in TARGET-RASTER
+# PIXELS (not real-world metres like macrotile_buffer_3857 above), for
+# aggregation_merge.py's SEAM-class boundary blur -- the boundary
+# between two priority groups that BOTH supplied real, measured data.
+# macrotile_buffer_3857's 150m is sized for the opposite case (D116: a
+# boundary facing a pixel NO group will ever fill, where a fabricated 0m
+# needs a long ramp so it doesn't ship as an impossible cliff) -- that
+# case keeps the full buffer-derived sigma unchanged. A seam between two
+# REAL sources only needs feathering wide enough to hide the coarser
+# source's own pixel grid (its own native-resolution "staircase"), a
+# few target pixels, not 150 real-world metres. At z16 the unconstrained
+# formula gives sigma=30px (~36m) -- two independent Opus design
+# reviews (D180) measured this destroying up to 102m of real 1m DEM1A
+# detail and stamping up to 48m of phantom land elevation onto the sea
+# surface, while only 74% of the seam step reduction is actually needed
+# to keep seam steps within the real 1m source's own natural roughness
+# (p99.9 ~8m/px). Both reviews independently converged on sigma=4..6;
+# 6 is chosen as the more conservative of the two and is a no-op for
+# every item at effective child_z <= 14 (the buffer-derived sigma is
+# already <= 6 there) -- so this only ever changes z15/z16 output.
+# min(sigma, this) can only ever REDUCE blur relative to today, never
+# add any.
+seam_blur_sigma_max = 6
+
 num_overviews = 6
 
 X_MIN_3857, _, X_MAX_3857, __ = transform_bounds('EPSG:4326', 'EPSG:3857', -180, 0, 180, 0)
